@@ -1,9 +1,19 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { vocabulary, getRandomChoices, VocabWord } from "@/data/vocabulary";
+import { createClient } from "@/lib/supabase/client";
+import { saveWordProgress, signOut } from "@/app/actions";
+import type { User } from "@supabase/supabase-js";
 
 type AnswerState = "unanswered" | "correct" | "wrong";
+
+interface WordProgress {
+  correct_count: number;
+  wrong_count: number;
+  mastered: boolean;
+}
 
 export default function QuizCard() {
   const [currentWord, setCurrentWord] = useState<VocabWord | null>(null);
@@ -13,6 +23,35 @@ export default function QuizCard() {
   const [score, setScore] = useState({ correct: 0, total: 0 });
   const [showExample, setShowExample] = useState(false);
   const [usedIds, setUsedIds] = useState<Set<number>>(new Set());
+  const [user, setUser] = useState<User | null>(null);
+  const [wordProgress, setWordProgress] = useState<WordProgress | null>(null);
+  const [savedProgress, setSavedProgress] = useState<WordProgress | null>(null);
+
+  // Auth state
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data: listener } = supabase.auth.onAuthStateChange((_, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // Load progress for current word
+  useEffect(() => {
+    if (!user || !currentWord) {
+      setWordProgress(null);
+      return;
+    }
+    const supabase = createClient();
+    supabase
+      .from("word_progress")
+      .select("correct_count, wrong_count, mastered")
+      .eq("user_id", user.id)
+      .eq("word_id", currentWord.id)
+      .single()
+      .then(({ data }) => setWordProgress(data ?? null));
+  }, [user, currentWord]);
 
   const loadNewWord = useCallback(() => {
     let available = vocabulary.filter((w) => !usedIds.has(w.id));
@@ -26,6 +65,7 @@ export default function QuizCard() {
     setSelected(null);
     setAnswerState("unanswered");
     setShowExample(false);
+    setSavedProgress(null);
     setUsedIds((prev) => new Set([...prev, word.id]));
   }, [usedIds]);
 
@@ -34,15 +74,22 @@ export default function QuizCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSelect = (choice: string) => {
-    if (answerState !== "unanswered") return;
+  const handleSelect = async (choice: string) => {
+    if (answerState !== "unanswered" || !currentWord) return;
     setSelected(choice);
-    if (choice === currentWord?.english) {
+    const isCorrect = choice === currentWord.english;
+
+    if (isCorrect) {
       setAnswerState("correct");
       setScore((s) => ({ correct: s.correct + 1, total: s.total + 1 }));
     } else {
       setAnswerState("wrong");
       setScore((s) => ({ ...s, total: s.total + 1 }));
+    }
+
+    if (user) {
+      const result = await saveWordProgress(currentWord.id, isCorrect);
+      if (result) setSavedProgress(result);
     }
   };
 
@@ -63,6 +110,9 @@ export default function QuizCard() {
 
   if (!currentWord) return null;
 
+  const progressAfterAnswer = savedProgress ?? wordProgress;
+  const justMastered = savedProgress?.mastered && !wordProgress?.mastered;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex flex-col">
       {/* Header */}
@@ -71,11 +121,35 @@ export default function QuizCard() {
           <span className="text-2xl">🇫🇷</span>
           <h1 className="text-lg font-bold text-slate-800">French Vocab</h1>
         </div>
-        <div className="flex items-center gap-1 text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-          <span className="text-green-600 font-bold">{score.correct}</span>
-          <span>/</span>
-          <span>{score.total}</span>
-          <span className="ml-1">correct</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+            <span className="text-green-600 font-bold">{score.correct}</span>
+            <span>/</span>
+            <span>{score.total}</span>
+          </div>
+          {user ? (
+            <div className="flex items-center gap-2">
+              <Link
+                href="/progress"
+                className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
+              >
+                My Progress
+              </Link>
+              <span className="text-slate-200">|</span>
+              <form action={signOut}>
+                <button className="text-sm text-slate-400 hover:text-slate-600 transition-colors">
+                  Sign out
+                </button>
+              </form>
+            </div>
+          ) : (
+            <Link
+              href="/login"
+              className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
+            >
+              Sign in
+            </Link>
+          )}
         </div>
       </header>
 
@@ -84,7 +158,12 @@ export default function QuizCard() {
         <div className="w-full max-w-lg space-y-5">
 
           {/* Word Card */}
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 text-center">
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 text-center relative">
+            {wordProgress?.mastered && (
+              <span className="absolute top-3 right-3 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
+                Mastered
+              </span>
+            )}
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
               {currentWord.partOfSpeech}
             </p>
@@ -124,11 +203,26 @@ export default function QuizCard() {
                   : "bg-orange-50 border-orange-200"
               }`}
             >
-              <div className="flex items-center gap-2">
-                <span className="text-xl">{answerState === "correct" ? "🎉" : "💡"}</span>
-                <p className={`font-semibold ${answerState === "correct" ? "text-green-800" : "text-orange-800"}`}>
-                  {answerState === "correct" ? "Correct!" : `Correct answer: ${currentWord.english}`}
-                </p>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">{answerState === "correct" ? "🎉" : "💡"}</span>
+                  <p className={`font-semibold ${answerState === "correct" ? "text-green-800" : "text-orange-800"}`}>
+                    {answerState === "correct" ? "Correct!" : `Correct answer: ${currentWord.english}`}
+                  </p>
+                </div>
+                {user && progressAfterAnswer && (
+                  <div className="text-right">
+                    {justMastered ? (
+                      <span className="text-xs font-bold text-green-700 bg-green-200 px-2 py-0.5 rounded-full">
+                        Word Mastered!
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-500">
+                        {progressAfterAnswer.correct_count}/3 to master
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               <p className="text-sm text-slate-600">{currentWord.explanation}</p>
@@ -145,6 +239,15 @@ export default function QuizCard() {
                   <p className="text-slate-800 font-medium text-sm italic">"{currentWord.example.french}"</p>
                   <p className="text-slate-500 text-sm">"{currentWord.example.english}"</p>
                 </div>
+              )}
+
+              {!user && (
+                <p className="text-xs text-slate-400 border-t border-slate-200 pt-3">
+                  <Link href="/login" className="text-blue-500 hover:text-blue-700 font-medium">
+                    Sign in
+                  </Link>{" "}
+                  to track which words you've mastered.
+                </p>
               )}
             </div>
           )}

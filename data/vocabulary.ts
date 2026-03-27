@@ -1,3 +1,5 @@
+import vocabularyExtraRaw from "./vocabulary-extra.json";
+
 export interface VocabWord {
   id: number;
   french: string;
@@ -11,7 +13,60 @@ export interface VocabWord {
   explanation: string;
 }
 
-export const vocabulary: VocabWord[] = [
+type VocabSeed = Omit<VocabWord, "id">;
+
+/** Subtitle-frequency homographs where Wiktionary’s first sense misleads learners. */
+const HOMOGRAPH_PATCH: Record<string, Partial<VocabSeed>> = {
+  est: {
+    english: "is (3rd person singular of être)",
+    partOfSpeech: "verb",
+    example: {
+      french: "Elle est française.",
+      english: "She is French.",
+    },
+    explanation: "Verb form of être, not the separate word for “east”.",
+  },
+  pas: {
+    english: "not (negation; often with ne)",
+    partOfSpeech: "adverb",
+    example: {
+      french: "Ce n'est pas grave.",
+      english: "It's not serious.",
+    },
+    explanation: "Negation adverb; in subtitles this is far more frequent than noun “step”.",
+  },
+  ai: {
+    english: "have (1st person singular of avoir)",
+    partOfSpeech: "verb",
+    example: { french: "J'ai faim.", english: "I'm hungry." },
+    explanation: "J' + ai: present of avoir.",
+  },
+  as: {
+    english: "have (2nd person singular informal of avoir)",
+    partOfSpeech: "verb",
+    example: { french: "Tu as raison.", english: "You're right." },
+    explanation: "Tu + as: present of avoir.",
+  },
+  es: {
+    english: "are (2nd person singular of être)",
+    partOfSpeech: "verb",
+    example: { french: "Tu es en retard.", english: "You are late." },
+    explanation: "Tu + es: present of être.",
+  },
+  a: {
+    english: "has; have (3rd person of avoir)",
+    partOfSpeech: "verb",
+    example: { french: "Il a deux frères.", english: "He has two brothers." },
+    explanation: "Il/elle/on a: third-person present of avoir.",
+  },
+};
+
+function withPatches(seed: VocabSeed): VocabSeed {
+  const patch = HOMOGRAPH_PATCH[seed.french];
+  return patch ? { ...seed, ...patch } : seed;
+}
+
+const coreVocabulary: VocabWord[] = [
   {
     id: 1,
     french: "bonjour",
@@ -313,6 +368,15 @@ export const vocabulary: VocabWord[] = [
     explanation: "'Ami' (m) / 'amie' (f). 'Petit ami / petite amie' means boyfriend/girlfriend in informal speech.",
   },
 ];
+
+const extraVocabulary: VocabWord[] = (vocabularyExtraRaw as VocabSeed[]).map(
+  (row, index) => ({
+    ...withPatches(row),
+    id: coreVocabulary.length + index + 1,
+  }),
+);
+
+export const vocabulary: VocabWord[] = [...coreVocabulary, ...extraVocabulary];
 
 export function getRandomChoices(correct: VocabWord, all: VocabWord[]): string[] {
   const others = all.filter((w) => w.id !== correct.id);

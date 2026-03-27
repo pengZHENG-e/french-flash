@@ -60,6 +60,24 @@ export async function signUp(formData: FormData) {
   return { success: "Account created! Check your email to confirm." };
 }
 
+export async function markWordMastered(wordId: number) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  await supabase.from("word_progress").upsert(
+    {
+      user_id: user.id,
+      word_id: wordId,
+      mastered: true,
+      last_answered_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id,word_id" }
+  );
+}
+
 export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();

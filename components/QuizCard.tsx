@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { vocabulary, getRandomChoices, VocabWord } from "@/data/vocabulary";
 import { createClient } from "@/lib/supabase/client";
-import { saveWordProgress, signOut } from "@/app/actions";
+import { saveWordProgress, markWordMastered, signOut } from "@/app/actions";
 import type { User } from "@supabase/supabase-js";
 
 type AnswerState = "unanswered" | "correct" | "wrong";
@@ -15,6 +15,21 @@ interface WordProgress {
   mastered: boolean;
 }
 
+const MASTERED_LS_KEY = "french_mastered_ids";
+
+function getLocalMastered(): Set<number> {
+  try {
+    const raw = localStorage.getItem(MASTERED_LS_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveLocalMastered(ids: Set<number>) {
+  localStorage.setItem(MASTERED_LS_KEY, JSON.stringify([...ids]));
+}
+
 export default function QuizCard() {
   const [currentWord, setCurrentWord] = useState<VocabWord | null>(null);
   const [choices, setChoices] = useState<string[]>([]);
@@ -23,16 +38,39 @@ export default function QuizCard() {
   const [score, setScore] = useState({ correct: 0, total: 0 });
   const [showExample, setShowExample] = useState(false);
   const [usedIds, setUsedIds] = useState<Set<number>>(new Set());
+  const [masteredIds, setMasteredIds] = useState<Set<number>>(new Set());
   const [user, setUser] = useState<User | null>(null);
   const [wordProgress, setWordProgress] = useState<WordProgress | null>(null);
   const [savedProgress, setSavedProgress] = useState<WordProgress | null>(null);
+  const [markingMastered, setMarkingMastered] = useState(false);
 
-  // Auth state
+  // Auth state + load mastered IDs
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+
+    async function init(userId: string | undefined) {
+      if (userId) {
+        // Load mastered IDs from DB
+        const { data } = await supabase
+          .from("word_progress")
+          .select("word_id")
+          .eq("user_id", userId)
+          .eq("mastered", true);
+        setMasteredIds(new Set(data?.map((r) => r.word_id) ?? []));
+      } else {
+        // Load from localStorage for guests
+        setMasteredIds(getLocalMastered());
+      }
+    }
+
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user);
+      init(data.user?.id);
+    });
+
     const { data: listener } = supabase.auth.onAuthStateChange((_, session) => {
       setUser(session?.user ?? null);
+      init(session?.user?.id);
     });
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -53,11 +91,17 @@ export default function QuizCard() {
       .then(({ data }) => setWordProgress(data ?? null));
   }, [user, currentWord]);
 
-  const loadNewWord = useCallback(() => {
-    let available = vocabulary.filter((w) => !usedIds.has(w.id));
+  const loadNewWord = useCallback((currentMasteredIds?: Set<number>) => {
+    const excluded = currentMasteredIds ?? masteredIds;
+    let available = vocabulary.filter((w) => !excluded.has(w.id) && !usedIds.has(w.id));
     if (available.length === 0) {
+      // All non-mastered words have been used — reset usedIds
+      available = vocabulary.filter((w) => !excluded.has(w.id));
       setUsedIds(new Set());
-      available = vocabulary;
+      if (available.length === 0) {
+        // All words are mastered — show all anyway
+        available = vocabulary;
+      }
     }
     const word = available[Math.floor(Math.random() * available.length)];
     setCurrentWord(word);
@@ -67,12 +111,17 @@ export default function QuizCard() {
     setShowExample(false);
     setSavedProgress(null);
     setUsedIds((prev) => new Set([...prev, word.id]));
-  }, [usedIds]);
+  }, [masteredIds, usedIds]);
 
+  // Load first word once masteredIds is ready
+  const [initialized, setInitialized] = useState(false);
   useEffect(() => {
-    loadNewWord();
+    if (!initialized) {
+      setInitialized(true);
+      loadNewWord(masteredIds);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [masteredIds]);
 
   const handleSelect = async (choice: string) => {
     if (answerState !== "unanswered" || !currentWord) return;
@@ -91,6 +140,23 @@ export default function QuizCard() {
       const result = await saveWordProgress(currentWord.id, isCorrect);
       if (result) setSavedProgress(result);
     }
+  };
+
+  const handleMarkMastered = async () => {
+    if (!currentWord) return;
+    setMarkingMastered(true);
+
+    const newMastered = new Set([...masteredIds, currentWord.id]);
+    setMasteredIds(newMastered);
+
+    if (user) {
+      await markWordMastered(currentWord.id);
+    } else {
+      saveLocalMastered(newMastered);
+    }
+
+    setMarkingMastered(false);
+    loadNewWord(newMastered);
   };
 
   const getButtonStyle = (choice: string) => {
@@ -112,6 +178,8 @@ export default function QuizCard() {
 
   const progressAfterAnswer = savedProgress ?? wordProgress;
   const justMastered = savedProgress?.mastered && !wordProgress?.mastered;
+  const isAlreadyMastered = masteredIds.has(currentWord.id);
+  const remainingCount = vocabulary.filter((w) => !masteredIds.has(w.id)).length;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex flex-col">
@@ -129,24 +197,16 @@ export default function QuizCard() {
           </div>
           {user ? (
             <div className="flex items-center gap-2">
-              <Link
-                href="/progress"
-                className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
-              >
+              <Link href="/progress" className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors">
                 My Progress
               </Link>
               <span className="text-slate-200">|</span>
               <form action={signOut}>
-                <button className="text-sm text-slate-400 hover:text-slate-600 transition-colors">
-                  Sign out
-                </button>
+                <button className="text-sm text-slate-400 hover:text-slate-600 transition-colors">Sign out</button>
               </form>
             </div>
           ) : (
-            <Link
-              href="/login"
-              className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
-            >
+            <Link href="/login" className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors">
               Sign in
             </Link>
           )}
@@ -159,7 +219,7 @@ export default function QuizCard() {
 
           {/* Word Card */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 text-center relative">
-            {wordProgress?.mastered && (
+            {isAlreadyMastered && (
               <span className="absolute top-3 right-3 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
                 Mastered
               </span>
@@ -169,6 +229,7 @@ export default function QuizCard() {
             </p>
             <h2 className="text-5xl font-bold text-slate-900 mb-2">{currentWord.french}</h2>
             <p className="text-slate-400 text-sm font-mono">/{currentWord.pronunciation}/</p>
+            <p className="text-xs text-slate-300 mt-3">{remainingCount} words left to learn</p>
           </div>
 
           {/* Choices */}
@@ -194,13 +255,22 @@ export default function QuizCard() {
             ))}
           </div>
 
+          {/* Mark as mastered button — always visible before answering */}
+          {answerState === "unanswered" && !isAlreadyMastered && (
+            <button
+              onClick={handleMarkMastered}
+              disabled={markingMastered}
+              className="w-full py-2.5 border-2 border-green-200 text-green-700 hover:bg-green-50 font-medium rounded-xl transition-all duration-200 text-sm"
+            >
+              I already know this word — skip forever ✓
+            </button>
+          )}
+
           {/* Feedback panel */}
           {answerState !== "unanswered" && (
             <div
               className={`rounded-2xl border-2 p-4 space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300 ${
-                answerState === "correct"
-                  ? "bg-green-50 border-green-200"
-                  : "bg-orange-50 border-orange-200"
+                answerState === "correct" ? "bg-green-50 border-green-200" : "bg-orange-50 border-orange-200"
               }`}
             >
               <div className="flex items-center justify-between">
@@ -241,12 +311,20 @@ export default function QuizCard() {
                 </div>
               )}
 
+              {!isAlreadyMastered && (
+                <button
+                  onClick={handleMarkMastered}
+                  disabled={markingMastered}
+                  className="w-full py-2 border border-green-300 text-green-700 hover:bg-green-100 text-sm font-medium rounded-xl transition-all"
+                >
+                  I know this word — skip forever ✓
+                </button>
+              )}
+
               {!user && (
                 <p className="text-xs text-slate-400 border-t border-slate-200 pt-3">
-                  <Link href="/login" className="text-blue-500 hover:text-blue-700 font-medium">
-                    Sign in
-                  </Link>{" "}
-                  to track which words you've mastered.
+                  <Link href="/login" className="text-blue-500 hover:text-blue-700 font-medium">Sign in</Link>{" "}
+                  to sync your progress across devices.
                 </p>
               )}
             </div>
@@ -255,7 +333,7 @@ export default function QuizCard() {
           {/* Next button */}
           {answerState !== "unanswered" && (
             <button
-              onClick={loadNewWord}
+              onClick={() => loadNewWord()}
               className="w-full py-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold rounded-xl transition-all duration-200 text-base shadow-md shadow-blue-200"
             >
               Next Word →

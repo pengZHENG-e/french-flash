@@ -65,27 +65,37 @@ async function buildQueue(params: RawSearchParams): Promise<QueueInfo> {
   return { ids: [], label: null };
 }
 
-async function loadStats() {
+async function loadServerState() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return null;
+  if (!user) return { stats: null, seenIds: [] as number[] };
 
-  const { data } = await supabase
-    .from("user_stats")
-    .select("current_streak, longest_streak, daily_goal, today_count, today_date")
-    .eq("user_id", user.id)
-    .maybeSingle();
+  const [{ data: stats }, { data: progressRows }] = await Promise.all([
+    supabase
+      .from("user_stats")
+      .select(
+        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date"
+      )
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase.from("word_progress").select("word_id").eq("user_id", user.id),
+  ]);
 
   const todayStr = new Date().toISOString().slice(0, 10);
-  const todayCount = data?.today_date === todayStr ? data?.today_count ?? 0 : 0;
+  const onToday = stats?.today_date === todayStr;
 
   return {
-    current_streak: data?.current_streak ?? 0,
-    longest_streak: data?.longest_streak ?? 0,
-    daily_goal: data?.daily_goal ?? 20,
-    today_count: todayCount,
+    stats: {
+      current_streak: stats?.current_streak ?? 0,
+      longest_streak: stats?.longest_streak ?? 0,
+      daily_goal: stats?.daily_goal ?? 20,
+      daily_new_goal: stats?.daily_new_goal ?? 10,
+      today_count: onToday ? stats?.today_count ?? 0 : 0,
+      today_new_count: onToday ? stats?.today_new_count ?? 0 : 0,
+    },
+    seenIds: progressRows?.map((r) => r.word_id) ?? [],
   };
 }
 
@@ -95,14 +105,14 @@ export default async function Home({
   searchParams: Promise<RawSearchParams>;
 }) {
   const params = await searchParams;
-  const queue = await buildQueue(params);
-  const stats = await loadStats();
+  const [queue, server] = await Promise.all([buildQueue(params), loadServerState()]);
 
   return (
     <QuizCard
       initialQueue={queue.ids.length ? queue.ids : null}
       queueLabel={queue.label}
-      initialStats={stats}
+      initialStats={server.stats}
+      initialSeenIds={server.seenIds}
     />
   );
 }

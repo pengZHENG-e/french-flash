@@ -3,6 +3,20 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { computeNext, isMastered, type Quality } from "@/lib/srs";
+import { vocabulary } from "@/data/vocabulary";
+
+// --- Types -----------------------------------------------------------------
+
+export interface WordProgressSnapshot {
+  correct_count: number;
+  wrong_count: number;
+  mastered: boolean;
+  ease_factor: number;
+  interval_days: number;
+  repetitions: number;
+  next_review_at: string | null;
+  last_answered_at: string | null;
+}
 
 export interface ReviewResult {
   correct_count: number;
@@ -15,37 +29,52 @@ export interface ReviewResult {
   stats: {
     current_streak: number;
     today_count: number;
+    today_new_count: number;
     daily_goal: number;
+    daily_new_goal: number;
     goal_just_hit: boolean;
+    new_goal_just_hit: boolean;
   } | null;
+  prev_snapshot: WordProgressSnapshot | null; // null ⇒ was a brand-new word
+  was_new: boolean;
 }
 
-// Compute streak & daily-goal state. Called inside reviewWord so a single
-// answer updates both word_progress and user_stats.
+// --- Helpers ---------------------------------------------------------------
+
+function todayYmd(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
 async function bumpStats(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string
+  userId: string,
+  wasNew: boolean
 ): Promise<ReviewResult["stats"]> {
   const { data: existing } = await supabase
     .from("user_stats")
-    .select("current_streak, longest_streak, last_activity_date, daily_goal, today_count, today_date, total_reviews")
+    .select(
+      "current_streak, longest_streak, last_activity_date, daily_goal, today_count, today_date, total_reviews, daily_new_goal, today_new_count"
+    )
     .eq("user_id", userId)
     .maybeSingle();
 
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
-  const yesterdayStr = new Date(today.getTime() - 86_400_000).toISOString().slice(0, 10);
+  const todayStr = todayYmd(today);
+  const yesterdayStr = todayYmd(new Date(today.getTime() - 86_400_000));
 
   const lastActivity = existing?.last_activity_date ?? null;
   const prevStreak = existing?.current_streak ?? 0;
   const prevLongest = existing?.longest_streak ?? 0;
   const dailyGoal = existing?.daily_goal ?? 20;
-  const prevTodayCount = existing?.today_date === todayStr ? existing?.today_count ?? 0 : 0;
+  const dailyNewGoal = existing?.daily_new_goal ?? 10;
+  const onToday = existing?.today_date === todayStr;
+  const prevTodayCount = onToday ? existing?.today_count ?? 0 : 0;
+  const prevTodayNewCount = onToday ? existing?.today_new_count ?? 0 : 0;
   const totalReviews = (existing?.total_reviews ?? 0) + 1;
 
   let currentStreak = prevStreak;
   if (lastActivity === todayStr) {
-    // already counted today — streak stays
+    // already counted today
   } else if (lastActivity === yesterdayStr) {
     currentStreak = prevStreak + 1;
   } else {
@@ -53,7 +82,9 @@ async function bumpStats(
   }
 
   const todayCount = prevTodayCount + 1;
+  const todayNewCount = prevTodayNewCount + (wasNew ? 1 : 0);
   const goalJustHit = prevTodayCount < dailyGoal && todayCount >= dailyGoal;
+  const newGoalJustHit = wasNew && prevTodayNewCount < dailyNewGoal && todayNewCount >= dailyNewGoal;
 
   await supabase.from("user_stats").upsert(
     {
@@ -62,8 +93,10 @@ async function bumpStats(
       longest_streak: Math.max(prevLongest, currentStreak),
       last_activity_date: todayStr,
       today_count: todayCount,
+      today_new_count: todayNewCount,
       today_date: todayStr,
       daily_goal: dailyGoal,
+      daily_new_goal: dailyNewGoal,
       total_reviews: totalReviews,
       updated_at: new Date().toISOString(),
     },
@@ -73,10 +106,35 @@ async function bumpStats(
   return {
     current_streak: currentStreak,
     today_count: todayCount,
+    today_new_count: todayNewCount,
     daily_goal: dailyGoal,
+    daily_new_goal: dailyNewGoal,
     goal_just_hit: goalJustHit,
+    new_goal_just_hit: newGoalJustHit,
   };
 }
+
+async function bumpDailyActivity(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  isCorrect: boolean
+) {
+  const day = todayYmd();
+  const { data: existing } = await supabase
+    .from("daily_activity")
+    .select("review_count, correct, wrong")
+    .eq("user_id", userId)
+    .eq("day", day)
+    .maybeSingle();
+  const reviewCount = (existing?.review_count ?? 0) + 1;
+  const correct = (existing?.correct ?? 0) + (isCorrect ? 1 : 0);
+  const wrong = (existing?.wrong ?? 0) + (isCorrect ? 0 : 1);
+  await supabase
+    .from("daily_activity")
+    .upsert({ user_id: userId, day, review_count: reviewCount, correct, wrong }, { onConflict: "user_id,day" });
+}
+
+// --- Public actions --------------------------------------------------------
 
 export async function reviewWord(wordId: number, quality: Quality): Promise<ReviewResult | null> {
   const supabase = await createClient();
@@ -87,10 +145,26 @@ export async function reviewWord(wordId: number, quality: Quality): Promise<Revi
 
   const { data: existing } = await supabase
     .from("word_progress")
-    .select("correct_count, wrong_count, ease_factor, interval_days, repetitions")
+    .select(
+      "correct_count, wrong_count, mastered, ease_factor, interval_days, repetitions, next_review_at, last_answered_at"
+    )
     .eq("user_id", user.id)
     .eq("word_id", wordId)
     .maybeSingle();
+
+  const wasNew = !existing;
+  const prevSnapshot: WordProgressSnapshot | null = existing
+    ? {
+        correct_count: existing.correct_count ?? 0,
+        wrong_count: existing.wrong_count ?? 0,
+        mastered: existing.mastered ?? false,
+        ease_factor: existing.ease_factor ?? 2.5,
+        interval_days: existing.interval_days ?? 0,
+        repetitions: existing.repetitions ?? 0,
+        next_review_at: existing.next_review_at ?? null,
+        last_answered_at: existing.last_answered_at ?? null,
+      }
+    : null;
 
   const isCorrect = quality >= 3;
   const correctCount = (existing?.correct_count ?? 0) + (isCorrect ? 1 : 0);
@@ -122,7 +196,10 @@ export async function reviewWord(wordId: number, quality: Quality): Promise<Revi
     { onConflict: "user_id,word_id" }
   );
 
-  const stats = await bumpStats(supabase, user.id);
+  const [stats] = await Promise.all([
+    bumpStats(supabase, user.id, wasNew),
+    bumpDailyActivity(supabase, user.id, isCorrect),
+  ]);
 
   return {
     correct_count: correctCount,
@@ -130,7 +207,41 @@ export async function reviewWord(wordId: number, quality: Quality): Promise<Revi
     mastered,
     ...next,
     stats,
+    prev_snapshot: prevSnapshot,
+    was_new: wasNew,
   };
+}
+
+/**
+ * Roll a word_progress row back to a previous snapshot (or delete the row
+ * when the snapshot is null — meaning the word had never been reviewed).
+ * We intentionally do NOT rewind user_stats/daily_activity — that keeps the
+ * logic simple and avoids tricky streak edge cases.
+ */
+export async function undoLastReview(
+  wordId: number,
+  snapshot: WordProgressSnapshot | null
+): Promise<boolean> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return false;
+
+  if (snapshot === null) {
+    await supabase
+      .from("word_progress")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("word_id", wordId);
+    return true;
+  }
+
+  await supabase.from("word_progress").upsert(
+    { user_id: user.id, word_id: wordId, ...snapshot },
+    { onConflict: "user_id,word_id" }
+  );
+  return true;
 }
 
 export async function setDailyGoal(goal: number) {
@@ -147,6 +258,20 @@ export async function setDailyGoal(goal: number) {
   );
 }
 
+export async function setDailyNewGoal(goal: number) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  const clamped = Math.max(0, Math.min(50, Math.round(goal)));
+  await supabase.from("user_stats").upsert(
+    { user_id: user.id, daily_new_goal: clamped, updated_at: new Date().toISOString() },
+    { onConflict: "user_id" }
+  );
+}
+
 export async function markWordMastered(wordId: number) {
   const supabase = await createClient();
   const {
@@ -154,7 +279,6 @@ export async function markWordMastered(wordId: number) {
   } = await supabase.auth.getUser();
   if (!user) return;
 
-  // Push the review date far into the future so the card won't resurface.
   const farFuture = new Date();
   farFuture.setFullYear(farFuture.getFullYear() + 10);
 
@@ -172,6 +296,84 @@ export async function markWordMastered(wordId: number) {
     { onConflict: "user_id,word_id" }
   );
 }
+
+// --- AI mnemonic -----------------------------------------------------------
+
+export interface MnemonicResult {
+  mnemonic: string;
+  cached: boolean;
+}
+
+export async function getMnemonic(wordId: number): Promise<MnemonicResult | null> {
+  const supabase = await createClient();
+
+  const { data: cached } = await supabase
+    .from("word_hints")
+    .select("mnemonic")
+    .eq("word_id", wordId)
+    .maybeSingle();
+  if (cached?.mnemonic) return { mnemonic: cached.mnemonic, cached: true };
+
+  const word = vocabulary.find((w) => w.id === wordId);
+  if (!word) return null;
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return {
+      mnemonic:
+        "AI mnemonics require setting ANTHROPIC_API_KEY. Tip: break the word into syllables and link each to a vivid image.",
+      cached: false,
+    };
+  }
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 300,
+        messages: [
+          {
+            role: "user",
+            content: `You are helping a Chinese speaker learn French. Write a memorable, vivid Chinese mnemonic (1–2 sentences) that links the sound or shape of the French word to its meaning. Be playful and concrete. No preamble.
+
+Word: ${word.french}
+Pronunciation: /${word.pronunciation}/
+Meaning (English): ${word.english}
+Part of speech: ${word.partOfSpeech}
+Context: ${word.explanation}
+
+Return ONLY the mnemonic in Chinese.`,
+          },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      return { mnemonic: "Mnemonic service is unavailable. Try again later.", cached: false };
+    }
+
+    const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+    const text = data.content?.find((c) => c.type === "text")?.text?.trim();
+    if (!text) return { mnemonic: "Could not generate mnemonic.", cached: false };
+
+    await supabase.from("word_hints").upsert(
+      { word_id: wordId, mnemonic: text, model: "claude-haiku-4-5" },
+      { onConflict: "word_id" }
+    );
+
+    return { mnemonic: text, cached: false };
+  } catch {
+    return { mnemonic: "Mnemonic service error.", cached: false };
+  }
+}
+
+// --- Auth ------------------------------------------------------------------
 
 export async function signIn(formData: FormData) {
   const supabase = await createClient();

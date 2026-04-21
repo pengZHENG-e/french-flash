@@ -18,6 +18,7 @@ import {
   pickEnglishChoices,
   pickFrenchChoices,
   checkTyped,
+  buildCloze,
   type QuestionType,
 } from "@/lib/quiz_types";
 import { speak, ttsSupported, prewarmVoices } from "@/lib/tts";
@@ -162,17 +163,26 @@ export default function QuizCard({
     [usedIds, seenIds]
   );
 
+  const [clozeMasked, setClozeMasked] = useState<string | null>(null);
+
   const prepareWord = useCallback((word: VocabWord) => {
-    // Crude heuristic: the client only knows whether it's been seen. The
-    // server owns the real SM-2 state. Unseen → always teach (mc_fr_en).
-    // Seen → treat as rep>=3 so every question type is eligible.
     const knownRep = seenIds.has(word.id) ? 3 : 0;
-    const chosenType = pickType(knownRep, ttsOk.current);
+    let chosenType = pickType(knownRep, ttsOk.current);
+
+    // Cloze falls back to mc_fr_en if the word isn't present verbatim in the example.
+    let masked: string | null = null;
+    if (chosenType === "cloze") {
+      const cloze = buildCloze(word.french, word.example.french);
+      if (cloze) masked = cloze.masked;
+      else chosenType = "mc_fr_en";
+    }
+
     setQType(chosenType);
+    setClozeMasked(masked);
 
     if (chosenType === "mc_fr_en" || chosenType === "listen") {
       setChoices(pickEnglishChoices(word, vocabulary));
-    } else if (chosenType === "mc_en_fr") {
+    } else if (chosenType === "mc_en_fr" || chosenType === "cloze") {
       setChoices(pickFrenchChoices(word, vocabulary));
     } else {
       setChoices([]);
@@ -184,7 +194,6 @@ export default function QuizCard({
     setShowMnemonic(false);
     setCurrentWord(word);
 
-    // Auto-play for listening type.
     if (chosenType === "listen") {
       setTimeout(() => speak(word.french), 150);
     }
@@ -255,7 +264,8 @@ export default function QuizCard({
     (choice: string) => {
       if (answerState !== "unanswered" || !currentWord) return;
       setSelected(choice);
-      const target = qType === "mc_en_fr" ? currentWord.french : currentWord.english;
+      const target =
+        qType === "mc_en_fr" || qType === "cloze" ? currentWord.french : currentWord.english;
       finalizeAnswer(choice === target);
     },
     [answerState, currentWord, qType, finalizeAnswer]
@@ -431,7 +441,8 @@ export default function QuizCard({
         "border-slate-200 bg-white hover:border-blue-400 hover:bg-blue-50 active:scale-95 cursor-pointer"
       );
     }
-    const target = qType === "mc_en_fr" ? currentWord?.french : currentWord?.english;
+    const target =
+      qType === "mc_en_fr" || qType === "cloze" ? currentWord?.french : currentWord?.english;
     if (choice === target) return base + "border-green-500 bg-green-50 text-green-800";
     if (choice === selected && answerState === "wrong")
       return base + "border-red-500 bg-red-50 text-red-800";
@@ -562,6 +573,7 @@ export default function QuizCard({
               qType={qType}
               answered={answerState !== "unanswered"}
               isMastered={isAlreadyMastered}
+              clozeMasked={clozeMasked}
               remainingCount={initialQueue ? null : remainingCount}
               queuePosition={initialQueue ? { idx: queueIdx, total: initialQueue.length } : null}
             />
@@ -660,6 +672,7 @@ function QuestionPrompt({
   qType,
   answered,
   isMastered,
+  clozeMasked,
   remainingCount,
   queuePosition,
 }: {
@@ -667,6 +680,7 @@ function QuestionPrompt({
   qType: QuestionType;
   answered: boolean;
   isMastered: boolean;
+  clozeMasked: string | null;
   remainingCount: number | null;
   queuePosition: { idx: number; total: number } | null;
 }) {
@@ -678,7 +692,15 @@ function QuestionPrompt({
         </span>
       )}
       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-        {qType === "mc_en_fr" ? "Pick the French word" : qType === "listen" ? "Listen & pick the meaning" : qType === "type" ? "Type the French" : word.partOfSpeech}
+        {qType === "mc_en_fr"
+          ? "Pick the French word"
+          : qType === "listen"
+          ? "Listen & pick the meaning"
+          : qType === "type"
+          ? "Type the French"
+          : qType === "cloze"
+          ? "Fill in the blank"
+          : word.partOfSpeech}
       </p>
 
       {/* Body varies by type */}
@@ -730,6 +752,21 @@ function QuestionPrompt({
               <span className="text-2xl font-bold text-slate-700">{word.french}</span>
               <AudioButton text={word.french} size="sm" />
               <span className="text-xs font-mono text-slate-400">/{word.pronunciation}/</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {qType === "cloze" && (
+        <>
+          <p className="text-xl font-medium text-slate-800 leading-relaxed italic">
+            &ldquo;{answered ? word.example.french : clozeMasked ?? word.example.french}&rdquo;
+          </p>
+          <p className="text-xs text-slate-400 mt-2">Hint: {word.english}</p>
+          {answered && (
+            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100">
+              <span className="text-2xl font-bold text-slate-700">{word.french}</span>
+              <AudioButton text={word.french} size="sm" />
             </div>
           )}
         </>
@@ -910,7 +947,12 @@ function FeedbackPanel({
 
       {showExample && (
         <div className="bg-white rounded-xl p-3 border border-slate-200 space-y-1">
-          <p className="text-slate-800 font-medium text-sm italic">&ldquo;{word.example.french}&rdquo;</p>
+          <div className="flex items-start gap-2">
+            <p className="text-slate-800 font-medium text-sm italic flex-1">
+              &ldquo;{word.example.french}&rdquo;
+            </p>
+            <AudioButton text={word.example.french} size="sm" />
+          </div>
           <p className="text-slate-500 text-sm">&ldquo;{word.example.english}&rdquo;</p>
         </div>
       )}

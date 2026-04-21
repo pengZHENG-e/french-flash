@@ -35,7 +35,7 @@ export default function VocabBrowser({ words, masteredIds, seenIds, signedIn }: 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return words.filter((w) => {
-      if (!levels.has(getLevel(w.id))) return false;
+      if (!levels.has(getLevel(w.id, w.level))) return false;
 
       const bucket = POS_BUCKETS.find((b) => b.match(w.partOfSpeech));
       if (bucket && !posKeys.has(bucket.key)) return false;
@@ -202,7 +202,7 @@ export default function VocabBrowser({ words, masteredIds, seenIds, signedIn }: 
             {filtered.length} {filtered.length === 1 ? "word" : "words"}
           </p>
           {filtered.map((w) => {
-            const level = getLevel(w.id);
+            const level = getLevel(w.id, w.level);
             const isMastered = masteredSet.has(w.id);
             const isSeen = seenSet.has(w.id);
             const isOpen = expanded === w.id;

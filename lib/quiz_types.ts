@@ -1,12 +1,13 @@
 import type { VocabWord } from "@/data/vocabulary";
 
-export type QuestionType = "mc_fr_en" | "mc_en_fr" | "listen" | "type";
+export type QuestionType = "mc_fr_en" | "mc_en_fr" | "listen" | "type" | "cloze";
 
 export const QUESTION_LABELS: Record<QuestionType, string> = {
   mc_fr_en: "French → English",
   mc_en_fr: "English → French",
   listen:   "Listen & pick",
   type:     "Type the French",
+  cloze:    "Fill in the blank",
 };
 
 /**
@@ -18,10 +19,9 @@ export function pickType(
   ttsSupported: boolean,
   rng: () => number = Math.random
 ): QuestionType {
-  if (repetitions <= 0) return "mc_fr_en";
-  if (repetitions === 1) return "mc_fr_en";
+  if (repetitions <= 1) return "mc_fr_en";
 
-  const pool: QuestionType[] = ["mc_fr_en", "mc_en_fr"];
+  const pool: QuestionType[] = ["mc_fr_en", "mc_en_fr", "cloze"];
   if (ttsSupported) pool.push("listen");
   if (repetitions >= 3) pool.push("type");
 
@@ -63,4 +63,33 @@ export function checkTyped(input: string, target: string): TypedResult {
   if (ni === nt) return "correct";
   if (stripAccents(ni) === stripAccents(nt)) return "accent_only";
   return "wrong";
+}
+
+/**
+ * Mask the target word inside an example sentence for cloze questions.
+ * Returns null if the word cannot be found verbatim (caller should fall
+ * back to another question type).
+ *
+ * The match is accent- and case-insensitive and respects word boundaries,
+ * but the returned `masked` string preserves the original punctuation and
+ * only replaces the matched run with an underline placeholder.
+ */
+export function buildCloze(wordFr: string, exampleFr: string): { masked: string; original: string } | null {
+  const targetBare = stripAccents(wordFr.toLowerCase());
+  if (!targetBare) return null;
+
+  // Walk tokens, comparing accent-insensitive forms.
+  const tokenRe = /[\p{L}\p{M}'’\-]+|[^\p{L}\p{M}'’\-]+/gu;
+  const matches = [...exampleFr.matchAll(tokenRe)];
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    const tok = m[0];
+    if (!/\p{L}/u.test(tok)) continue;
+    if (stripAccents(tok.toLowerCase()) === targetBare) {
+      const before = exampleFr.slice(0, m.index!);
+      const after = exampleFr.slice(m.index! + tok.length);
+      return { masked: before + "____" + after, original: exampleFr };
+    }
+  }
+  return null;
 }

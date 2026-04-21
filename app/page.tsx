@@ -2,6 +2,7 @@ import QuizCard from "@/components/QuizCard";
 import { createClient } from "@/lib/supabase/server";
 import { vocabulary } from "@/data/vocabulary";
 import { LEVEL_RANGES, type Level } from "@/data/levels";
+import { redirect } from "next/navigation";
 
 type RawSearchParams = { [k: string]: string | string[] | undefined };
 
@@ -70,13 +71,13 @@ async function loadServerState() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { stats: null, seenIds: [] as number[] };
+  if (!user) return { stats: null, seenIds: [] as number[], onboarded: true };
 
   const [{ data: stats }, { data: progressRows }] = await Promise.all([
     supabase
       .from("user_stats")
       .select(
-        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date"
+        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, onboarded"
       )
       .eq("user_id", user.id)
       .maybeSingle(),
@@ -96,6 +97,7 @@ async function loadServerState() {
       today_new_count: onToday ? stats?.today_new_count ?? 0 : 0,
     },
     seenIds: progressRows?.map((r) => r.word_id) ?? [],
+    onboarded: stats?.onboarded ?? false,
   };
 }
 
@@ -106,6 +108,13 @@ export default async function Home({
 }) {
   const params = await searchParams;
   const [queue, server] = await Promise.all([buildQueue(params), loadServerState()]);
+
+  // Brand-new users get sent to placement test (but not if they already
+  // have progress — that means they were using the app before onboarding
+  // existed, and shouldn't be interrupted).
+  if (!server.onboarded && server.seenIds.length === 0 && !queue.ids.length) {
+    redirect("/onboarding");
+  }
 
   return (
     <QuizCard

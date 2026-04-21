@@ -141,7 +141,7 @@ export default async function ReviewPage() {
                   className="flex items-center justify-between rounded-xl px-4 py-2 bg-white border border-slate-100"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-xs font-semibold text-slate-400 w-8 shrink-0">{getLevel(word.id)}</span>
+                    <span className="text-xs font-semibold text-slate-400 w-8 shrink-0">{getLevel(word.id, word.level)}</span>
                     <div className="min-w-0">
                       <span className="font-semibold text-slate-900">{word.french}</span>
                       <span className="text-slate-500 text-sm ml-2 truncate">{word.english}</span>
@@ -172,7 +172,7 @@ export default async function ReviewPage() {
                   className="flex items-center justify-between rounded-xl px-4 py-2 bg-white border border-slate-100"
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-xs font-semibold text-slate-400 w-8 shrink-0">{getLevel(word.id)}</span>
+                    <span className="text-xs font-semibold text-slate-400 w-8 shrink-0">{getLevel(word.id, word.level)}</span>
                     <div className="min-w-0">
                       <span className="font-semibold text-slate-900">{word.french}</span>
                       <span className="text-slate-500 text-sm ml-2 truncate">{word.english}</span>

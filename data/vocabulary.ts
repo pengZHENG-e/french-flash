@@ -1,3 +1,6 @@
+import type { Level } from "./levels";
+import { generatedSeed } from "./vocabulary_generated";
+
 export interface VocabWord {
   id: number;
   french: string;
@@ -9,9 +12,10 @@ export interface VocabWord {
     english: string;
   };
   explanation: string;
+  level?: Level;
 }
 
-type VocabSeed = Omit<VocabWord, "id">;
+export type VocabSeed = Omit<VocabWord, "id">;
 
 /** Subtitle-frequency homographs where Wiktionary's first sense misleads learners. */
 const HOMOGRAPH_PATCH: Record<string, Partial<VocabSeed>> = {
@@ -2662,10 +2666,12 @@ const seedVocabulary: VocabSeed[] = [
   },
 ];
 
-export const vocabulary: VocabWord[] = seedVocabulary.map((seed, index) => ({
-  ...withPatches(seed),
-  id: index + 1,
-}));
+export const vocabulary: VocabWord[] = [...seedVocabulary, ...generatedSeed].map(
+  (seed, index) => ({
+    ...withPatches(seed),
+    id: index + 1,
+  })
+);
 
 export function getRandomChoices(correct: VocabWord, all: VocabWord[]): string[] {
   const others = all.filter((w) => w.id !== correct.id);

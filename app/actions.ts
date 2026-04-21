@@ -272,6 +272,62 @@ export async function setDailyNewGoal(goal: number) {
   );
 }
 
+export interface OnboardingAnswer {
+  word_id: number;
+  correct: boolean;
+}
+
+export async function completeOnboarding(answers: OnboardingAnswer[]) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const now = new Date();
+  const future2d = new Date(now.getTime() + 2 * 86_400_000);
+
+  const rows = answers.map((a) => ({
+    user_id: user.id,
+    word_id: a.word_id,
+    correct_count: a.correct ? 1 : 0,
+    wrong_count: a.correct ? 0 : 1,
+    mastered: false,
+    ease_factor: a.correct ? 2.5 : 2.3,
+    interval_days: a.correct ? 2 : 0,
+    repetitions: a.correct ? 1 : 0,
+    next_review_at: (a.correct ? future2d : now).toISOString(),
+    last_answered_at: now.toISOString(),
+  }));
+
+  if (rows.length > 0) {
+    await supabase.from("word_progress").upsert(rows, { onConflict: "user_id,word_id" });
+  }
+
+  await supabase.from("user_stats").upsert(
+    { user_id: user.id, onboarded: true, updated_at: now.toISOString() },
+    { onConflict: "user_id" }
+  );
+
+  return {
+    seeded: answers.filter((a) => a.correct).length,
+    total: answers.length,
+  };
+}
+
+export async function skipOnboarding() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  await supabase.from("user_stats").upsert(
+    { user_id: user.id, onboarded: true, updated_at: new Date().toISOString() },
+    { onConflict: "user_id" }
+  );
+}
+
 export async function markWordMastered(wordId: number) {
   const supabase = await createClient();
   const {

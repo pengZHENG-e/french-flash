@@ -18,7 +18,8 @@ export const LEVEL_RANGES: LevelRange[] = [
   { level: "C1", label: "Upper Advanced (C1)", startId: 172, endId: 234 },
 ];
 
-export function getLevel(id: number): Level {
+export function getLevel(id: number, explicit?: Level): Level {
+  if (explicit) return explicit;
   for (const r of LEVEL_RANGES) {
     if (id >= r.startId && id <= r.endId) return r.level;
   }

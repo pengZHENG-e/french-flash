@@ -275,7 +275,7 @@ export default async function ProgressPage() {
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xs font-semibold text-slate-400 w-8 shrink-0">{getLevel(word.id)}</span>
+                    <span className="text-xs font-semibold text-slate-400 w-8 shrink-0">{getLevel(word.id, word.level)}</span>
                     <div className="min-w-0">
                       <span className="font-semibold text-slate-900">{word.french}</span>
                       <span className="text-slate-400 text-sm ml-2">{word.english}</span>

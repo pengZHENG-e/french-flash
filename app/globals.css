@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Enable class-based dark mode: html.dark ... */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -12,11 +15,13 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* The app opts into class-based theming; remove prefers-color-scheme so the
+   system preference doesn't flash before the inline script runs. The pre-paint
+   script in layout.tsx sets `html.dark` based on localStorage + system pref. */
+
+.dark {
+  --background: #0b1120;
+  --foreground: #e2e8f0;
 }
 
 body {
@@ -24,3 +29,40 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* -- Dark-mode quick pass --------------------------------------------------
+   Instead of sprinkling `dark:` variants across every component, we override
+   the handful of Tailwind utilities that dominate the UI.  This is a broad
+   brush: anything specifically styled with other colors (rating buttons,
+   streak chips, etc.) keeps its original hue, which is the intended effect. */
+
+.dark .bg-white { background-color: rgb(30 41 59) !important; }
+.dark .bg-white\/80 { background-color: rgb(15 23 42 / 0.8) !important; }
+.dark .bg-slate-100 { background-color: rgb(51 65 85) !important; }
+.dark .bg-slate-50 { background-color: rgb(30 41 59) !important; }
+.dark .bg-slate-900 { background-color: rgb(2 6 23) !important; }
+.dark .bg-blue-50 { background-color: rgb(30 58 138 / 0.2) !important; }
+.dark .bg-green-50 { background-color: rgb(20 83 45 / 0.35) !important; }
+.dark .bg-orange-50 { background-color: rgb(124 45 18 / 0.35) !important; }
+.dark .bg-red-50 { background-color: rgb(127 29 29 / 0.35) !important; }
+.dark .bg-yellow-50 { background-color: rgb(120 53 15 / 0.35) !important; }
+.dark .bg-purple-50 { background-color: rgb(76 29 149 / 0.25) !important; }
+.dark .bg-indigo-50 { background-color: rgb(49 46 129 / 0.35) !important; }
+
+/* Softer borders in dark mode */
+.dark .border-slate-100 { border-color: rgb(51 65 85) !important; }
+.dark .border-slate-200 { border-color: rgb(71 85 105) !important; }
+
+/* Text contrast */
+.dark .text-slate-900 { color: rgb(241 245 249) !important; }
+.dark .text-slate-800 { color: rgb(226 232 240) !important; }
+.dark .text-slate-700 { color: rgb(203 213 225) !important; }
+.dark .text-slate-600 { color: rgb(148 163 184) !important; }
+.dark .text-slate-500 { color: rgb(148 163 184) !important; }
+.dark .text-slate-400 { color: rgb(100 116 139) !important; }
+.dark .text-slate-300 { color: rgb(71 85 105) !important; }
+
+/* Page gradient becomes a subtle dark gradient. */
+.dark .from-blue-50 { --tw-gradient-from: rgb(15 23 42) !important; }
+.dark .via-white { --tw-gradient-via: rgb(30 41 59) !important; }
+.dark .to-purple-50 { --tw-gradient-to: rgb(49 46 129) !important; }

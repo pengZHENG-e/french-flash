@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import type { VocabWord } from "@/data/vocabulary";
+import { lookupFrenchWord, type LookupResult } from "@/app/actions";
 
 interface Props {
   vocabulary: VocabWord[];
@@ -30,9 +31,23 @@ export default function ImportClient({ vocabulary, masteredIds, seenIds, signedI
   const [text, setText] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [lookups, setLookups] = useState<Record<string, LookupResult | "loading" | "error">>({});
+  const [activeLookup, setActiveLookup] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
 
   const masteredSet = useMemo(() => new Set(masteredIds), [masteredIds]);
   const seenSet = useMemo(() => new Set(seenIds), [seenIds]);
+
+  function lookup(raw: string) {
+    const key = raw.toLowerCase();
+    setActiveLookup(key);
+    if (lookups[key] && lookups[key] !== "error") return;
+    setLookups((prev) => ({ ...prev, [key]: "loading" }));
+    startTransition(async () => {
+      const result = await lookupFrenchWord(raw);
+      setLookups((prev) => ({ ...prev, [key]: result ?? "error" }));
+    });
+  }
 
   const lookupMap = useMemo(() => {
     const m = new Map<string, VocabWord>();
@@ -155,22 +170,39 @@ export default function ImportClient({ vocabulary, masteredIds, seenIds, signedI
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
               <p className="leading-relaxed text-slate-800">
                 {tokens.map((t, i) => {
-                  if (!t.match) return <span key={i}>{t.text}</span>;
-                  const isSel = selected.has(t.match.id);
-                  const isMastered = masteredSet.has(t.match.id);
-                  const isSeen = seenSet.has(t.match.id);
-                  const cls = isMastered
-                    ? "bg-green-100 text-green-900 border-green-300"
-                    : isSeen
-                    ? "bg-yellow-100 text-yellow-900 border-yellow-300"
-                    : "bg-blue-100 text-blue-900 border-blue-300";
+                  if (t.match) {
+                    const isSel = selected.has(t.match.id);
+                    const isMastered = masteredSet.has(t.match.id);
+                    const isSeen = seenSet.has(t.match.id);
+                    const cls = isMastered
+                      ? "bg-green-100 text-green-900 border-green-300"
+                      : isSeen
+                      ? "bg-yellow-100 text-yellow-900 border-yellow-300"
+                      : "bg-blue-100 text-blue-900 border-blue-300";
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => toggle(t.match!.id)}
+                        title={`${t.match.english} · ${t.match.partOfSpeech}`}
+                        className={`inline-block mx-0.5 px-1 rounded border transition-all ${cls} ${
+                          isSel ? "ring-2 ring-blue-500 ring-offset-1" : ""
+                        }`}
+                      >
+                        {t.text}
+                      </button>
+                    );
+                  }
+                  // Unmatched: make word-like tokens clickable for AI lookup.
+                  const isWordish = /^[\p{L}\p{M}'’\-]{2,}$/u.test(t.text);
+                  if (!isWordish) return <span key={i}>{t.text}</span>;
+                  const isActive = activeLookup === t.text.toLowerCase();
                   return (
                     <button
                       key={i}
-                      onClick={() => toggle(t.match!.id)}
-                      title={`${t.match.english} · ${t.match.partOfSpeech}`}
-                      className={`inline-block mx-0.5 px-1 rounded border transition-all ${cls} ${
-                        isSel ? "ring-2 ring-blue-500 ring-offset-1" : ""
+                      onClick={() => lookup(t.text)}
+                      title="Click for AI translation"
+                      className={`inline-block mx-0.5 px-0.5 rounded border border-transparent hover:border-slate-300 hover:bg-slate-100 transition-all ${
+                        isActive ? "bg-slate-100 border-slate-300" : ""
                       }`}
                     >
                       {t.text}
@@ -182,8 +214,18 @@ export default function ImportClient({ vocabulary, masteredIds, seenIds, signedI
                 <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-blue-200 border border-blue-300" /> New</span>
                 <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-yellow-200 border border-yellow-300" /> Learning</span>
                 <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-green-200 border border-green-300" /> Mastered</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-slate-100 border border-slate-300" /> Click = AI lookup</span>
               </div>
             </div>
+
+            {/* AI lookup inline panel */}
+            {activeLookup && (
+              <LookupPanel
+                word={activeLookup}
+                state={lookups[activeLookup]}
+                onClose={() => setActiveLookup(null)}
+              />
+            )}
 
             {/* Summary */}
             <div className="grid grid-cols-3 gap-3">
@@ -259,6 +301,43 @@ function Summary({ label, value, color }: { label: string; value: number; color:
     <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-3 text-center">
       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</p>
       <p className={`text-2xl font-bold text-${color}`}>{value}</p>
+    </div>
+  );
+}
+
+function LookupPanel({
+  word,
+  state,
+  onClose,
+}: {
+  word: string;
+  state: LookupResult | "loading" | "error" | undefined;
+  onClose: () => void;
+}) {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-300 shadow-md p-4 space-y-2">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">AI lookup</p>
+          <h3 className="text-2xl font-bold text-slate-900">{word}</h3>
+        </div>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-700" aria-label="Close">×</button>
+      </div>
+      {(state === undefined || state === "loading") && (
+        <p className="text-sm text-slate-400 italic">Looking up…</p>
+      )}
+      {state === "error" && (
+        <p className="text-sm text-red-500">Could not look up this word.</p>
+      )}
+      {state && typeof state === "object" && (
+        <div className="space-y-1">
+          <p className="text-sm text-slate-700">
+            <span className="font-semibold">{state.english}</span>
+            <span className="text-xs text-slate-400 uppercase ml-2">{state.partOfSpeech}</span>
+          </p>
+          {state.note && <p className="text-xs text-slate-500">{state.note}</p>}
+        </div>
+      )}
     </div>
   );
 }

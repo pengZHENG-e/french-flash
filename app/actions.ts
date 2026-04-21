@@ -429,6 +429,187 @@ Return ONLY the mnemonic in Chinese.`,
   }
 }
 
+// --- AI word lookup --------------------------------------------------------
+
+export interface LookupResult {
+  french: string;
+  english: string;
+  partOfSpeech: string;
+  note?: string;
+}
+
+export async function lookupFrenchWord(word: string): Promise<LookupResult | null> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const clean = word.trim().toLowerCase();
+  if (!clean || clean.length > 30) return null;
+  if (!apiKey) {
+    return {
+      french: clean,
+      english: "(set ANTHROPIC_API_KEY to enable AI lookup)",
+      partOfSpeech: "—",
+    };
+  }
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 200,
+        messages: [
+          {
+            role: "user",
+            content: `Translate the French word "${clean}" to English. Return compact JSON with keys: "french" (dictionary form, lowercase, with accents), "english" (concise 1-6 word gloss), "partOfSpeech" (one of: noun (m), noun (f), verb, adjective, adverb, exclamation, preposition, conjunction, pronoun), "note" (optional 1-sentence usage hint). Return ONLY the JSON.`,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+    const text = data.content?.find((c) => c.type === "text")?.text ?? "";
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end < 0) return null;
+    const parsed = JSON.parse(text.slice(start, end + 1)) as LookupResult;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// --- Verb conjugations -----------------------------------------------------
+
+export interface Conjugation {
+  present: Record<string, string>;
+  passe_compose: Record<string, string>;
+  imparfait: Record<string, string>;
+  futur: Record<string, string>;
+  subjonctif: Record<string, string>;
+}
+
+export async function getConjugation(wordId: number): Promise<Conjugation | null> {
+  const supabase = await createClient();
+
+  const { data: cached } = await supabase
+    .from("word_conjugations")
+    .select("tenses")
+    .eq("word_id", wordId)
+    .maybeSingle();
+  if (cached?.tenses) return cached.tenses as Conjugation;
+
+  const word = vocabulary.find((w) => w.id === wordId);
+  if (!word || !word.partOfSpeech.startsWith("verb")) return null;
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 800,
+        messages: [
+          {
+            role: "user",
+            content: `Return conjugation tables for the French verb "${word.french}" in JSON. Schema:
+{
+  "present":       {"je":"...","tu":"...","il":"...","nous":"...","vous":"...","ils":"..."},
+  "passe_compose": {"je":"j'ai ...","tu":"...","il":"...","nous":"...","vous":"...","ils":"..."},
+  "imparfait":     {"je":"...","tu":"...","il":"...","nous":"...","vous":"...","ils":"..."},
+  "futur":         {"je":"...","tu":"...","il":"...","nous":"...","vous":"...","ils":"..."},
+  "subjonctif":    {"que je":"...","que tu":"...","qu'il":"...","que nous":"...","que vous":"...","qu'ils":"..."}
+}
+
+Rules: use elisions (j'ai not je ai). Use the actual verb form, not the verb name. Return ONLY JSON.`,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
+    const text = data.content?.find((c) => c.type === "text")?.text ?? "";
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end < 0) return null;
+    const parsed = JSON.parse(text.slice(start, end + 1)) as Conjugation;
+
+    await supabase
+      .from("word_conjugations")
+      .upsert({ word_id: wordId, tenses: parsed, model: "claude-haiku-4-5" }, { onConflict: "word_id" });
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// --- Push notifications ----------------------------------------------------
+
+export interface PushSubscriptionPayload {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+export async function savePushSubscription(sub: PushSubscriptionPayload) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+
+  await supabase.from("push_subscriptions").upsert(
+    {
+      user_id: user.id,
+      endpoint: sub.endpoint,
+      p256dh: sub.p256dh,
+      auth: sub.auth,
+    },
+    { onConflict: "user_id,endpoint" }
+  );
+
+  await supabase.from("user_stats").upsert(
+    { user_id: user.id, notifications_enabled: true, updated_at: new Date().toISOString() },
+    { onConflict: "user_id" }
+  );
+}
+
+export async function disablePushNotifications() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase.from("push_subscriptions").delete().eq("user_id", user.id);
+  await supabase.from("user_stats").upsert(
+    { user_id: user.id, notifications_enabled: false, updated_at: new Date().toISOString() },
+    { onConflict: "user_id" }
+  );
+}
+
+export async function setWeeklyEmail(enabled: boolean) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase.from("user_stats").upsert(
+    { user_id: user.id, weekly_email_enabled: enabled, updated_at: new Date().toISOString() },
+    { onConflict: "user_id" }
+  );
+}
+
 // --- Auth ------------------------------------------------------------------
 
 export async function signIn(formData: FormData) {

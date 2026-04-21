@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { VocabWord } from "@/data/vocabulary";
 import { LEVEL_RANGES, LEVELS, getLevel, type Level } from "@/data/levels";
+import AudioButton from "@/components/AudioButton";
+import ConjugationBox from "@/components/ConjugationBox";
 
 type MasteryFilter = "all" | "unseen" | "learning" | "mastered";
 
@@ -244,15 +246,22 @@ export default function VocabBrowser({ words, masteredIds, seenIds, signedIn }: 
                 </button>
                 {isOpen && (
                   <div className="px-4 pb-4 pt-1 space-y-2 text-sm">
-                    <div className="flex items-center gap-3 text-xs text-slate-500">
+                    <div className="flex items-center gap-2 text-xs text-slate-500">
                       <span className="font-mono">/{w.pronunciation}/</span>
                       <span className="uppercase tracking-wider">{w.partOfSpeech}</span>
+                      <AudioButton text={w.french} size="sm" />
                     </div>
                     <p className="text-slate-700">{w.explanation}</p>
                     <div className="bg-white rounded-lg p-2 border border-slate-200">
-                      <p className="italic text-slate-800">&ldquo;{w.example.french}&rdquo;</p>
+                      <div className="flex items-start gap-2">
+                        <p className="italic text-slate-800 flex-1">&ldquo;{w.example.french}&rdquo;</p>
+                        <AudioButton text={w.example.french} size="sm" />
+                      </div>
                       <p className="text-slate-500">&ldquo;{w.example.english}&rdquo;</p>
                     </div>
+                    {w.partOfSpeech === "verb" && signedIn && (
+                      <div className="pt-1"><ConjugationBox wordId={w.id} /></div>
+                    )}
                     <Link
                       href={`/?queue=${w.id}`}
                       className="inline-block text-xs font-semibold text-blue-600 hover:text-blue-800"

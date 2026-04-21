@@ -17,6 +17,16 @@ export const metadata: Metadata = {
   description: "Learn French vocabulary with interactive multiple-choice quizzes",
 };
 
+// Inlined into <head> to apply the stored theme before first paint and avoid
+// a flash of the wrong color scheme. Reads localStorage, falls back to system.
+const THEME_INIT_SCRIPT = `
+try {
+  const t = localStorage.getItem('theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if (t === 'dark' || (!t && prefersDark)) document.documentElement.classList.add('dark');
+} catch {}
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -27,6 +37,9 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

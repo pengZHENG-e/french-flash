@@ -23,6 +23,7 @@ import {
 } from "@/lib/quiz_types";
 import { speak, ttsSupported, prewarmVoices } from "@/lib/tts";
 import AudioButton from "@/components/AudioButton";
+import ThemeToggle from "@/components/ThemeToggle";
 import type { User } from "@supabase/supabase-js";
 
 type AnswerState = "unanswered" | "correct" | "wrong" | "accent";
@@ -513,6 +514,7 @@ export default function QuizCard({
               <Link href="/login" className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors">Sign in</Link>
             </>
           )}
+          <ThemeToggle />
         </div>
       </header>
 

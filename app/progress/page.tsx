@@ -5,6 +5,7 @@ import Link from "next/link";
 import { signOut, setDailyGoal, setDailyNewGoal } from "@/app/actions";
 import { getLevel, LEVEL_RANGES } from "@/data/levels";
 import Heatmap from "@/components/Heatmap";
+import NotificationPrefs from "@/components/NotificationPrefs";
 
 const POS_BUCKETS: { key: string; label: string; match: (pos: string) => boolean }[] = [
   { key: "noun",        label: "Nouns",       match: (p) => p.startsWith("noun")   },
@@ -33,7 +34,7 @@ export default async function ProgressPage() {
     supabase
       .from("user_stats")
       .select(
-        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, total_reviews"
+        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, total_reviews, weekly_email_enabled"
       )
       .eq("user_id", user.id)
       .maybeSingle(),
@@ -154,6 +155,9 @@ export default async function ProgressPage() {
             </form>
           </div>
         </div>
+
+        {/* Notification prefs */}
+        <NotificationPrefs weeklyEnabled={stats?.weekly_email_enabled ?? false} />
 
         {/* Heatmap */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">

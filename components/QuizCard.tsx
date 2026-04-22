@@ -358,6 +358,15 @@ export default function QuizCard({
     loadNewWord();
   }, [loadNewWord]);
 
+  // Switch to mc_fr_en without moving to the next word (e.g. no audio).
+  const handleSwitchType = useCallback(() => {
+    if (!currentWord || answerState !== "unanswered") return;
+    setQType("mc_fr_en");
+    setChoices(pickEnglishChoices(currentWord, vocabulary));
+    setClozeMasked(null);
+    setTypedInput("");
+  }, [currentWord, answerState]);
+
   // --- Keyboard shortcuts --------------------------------------------------
 
   useEffect(() => {
@@ -390,6 +399,10 @@ export default function QuizCard({
         if (e.key.toLowerCase() === "m") {
           e.preventDefault();
           handleMarkMastered();
+        }
+        if (e.key.toLowerCase() === "t" && qType !== "mc_fr_en") {
+          e.preventDefault();
+          handleSwitchType();
         }
         return;
       }
@@ -430,6 +443,7 @@ export default function QuizCard({
     handleRate,
     handleGuestNext,
     handleMarkMastered,
+    handleSwitchType,
   ]);
 
   // --- Styles --------------------------------------------------------------
@@ -570,6 +584,23 @@ export default function QuizCard({
                 getChoiceStyle={getChoiceStyle}
                 onSelect={handleChoice}
               />
+            )}
+
+            {/* Switch question type (before answering, only for non-default types) */}
+            {answerState === "unanswered" && qType !== "mc_fr_en" && (
+              <button
+                onClick={handleSwitchType}
+                className="w-full py-2 border border-slate-200 text-slate-500 hover:bg-slate-50 font-medium rounded-xl transition-all text-xs flex items-center justify-center gap-2"
+              >
+                <span>
+                  {qType === "listen"
+                    ? "🔇 No audio available — switch to reading"
+                    : qType === "type"
+                    ? "⌨️ Can't type right now — switch to multiple choice"
+                    : "🔄 Switch to multiple choice"}
+                </span>
+                <span className="opacity-50">(T)</span>
+              </button>
             )}
 
             {/* Mark-as-known (before answering, non-queue mode) */}

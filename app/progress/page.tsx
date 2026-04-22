@@ -27,7 +27,7 @@ export default async function ProgressPage() {
   sinceDate.setDate(sinceDate.getDate() - 181);
   const sinceIso = sinceDate.toISOString().slice(0, 10);
 
-  const [{ data: progressRows }, { data: stats }, { data: activityRows }] = await Promise.all([
+  const [{ data: progressRows }, { data: stats }, { data: activityRows }, { data: latestTest }] = await Promise.all([
     supabase
       .from("word_progress")
       .select("word_id, correct_count, wrong_count, mastered, repetitions, next_review_at")
@@ -44,6 +44,13 @@ export default async function ProgressPage() {
       .select("day, review_count")
       .eq("user_id", user.id)
       .gte("day", sinceIso),
+    supabase
+      .from("level_tests")
+      .select("level, correct, total, taken_at")
+      .eq("user_id", user.id)
+      .order("taken_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   const progressMap = new Map(progressRows?.map((r) => [r.word_id, r]) ?? []);
@@ -295,11 +302,42 @@ export default async function ProgressPage() {
           </div>
         </div>
 
-        {/* Retake placement test */}
+        {/* Level test */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-700">📝 Level test</p>
+              <p className="text-xs text-slate-400">
+                20 questions across A1–C1. Get a CEFR verdict with per-level breakdown.
+              </p>
+            </div>
+            <Link
+              href="/level-test"
+              className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold whitespace-nowrap"
+            >
+              Take test →
+            </Link>
+          </div>
+          {latestTest && (
+            <div className="border-t border-slate-100 pt-3 flex items-center justify-between text-xs">
+              <span className="text-slate-500">
+                Last result: <span className="font-semibold text-slate-800">{latestTest.level}</span>{" "}
+                ({latestTest.correct}/{latestTest.total})
+              </span>
+              <span className="text-slate-400">
+                {new Date(latestTest.taken_at).toLocaleDateString()}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Re-seed SRS (brief onboarding) */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center justify-between">
           <div>
-            <p className="text-sm font-semibold text-slate-700">Retake placement test</p>
-            <p className="text-xs text-slate-400">10 quick questions; re-seed your SRS state.</p>
+            <p className="text-sm font-semibold text-slate-700">🎯 Quick placement</p>
+            <p className="text-xs text-slate-400">
+              Only 10 questions — re-seed your SRS state without a full diagnostic.
+            </p>
           </div>
           <Link href="/onboarding" className="text-xs font-semibold text-blue-600 hover:text-blue-800">
             Start →

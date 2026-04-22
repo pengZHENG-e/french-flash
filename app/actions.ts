@@ -315,6 +315,85 @@ export async function completeOnboarding(answers: OnboardingAnswer[]) {
   };
 }
 
+export type CefrLevel = "A1" | "A2" | "B1" | "B2" | "C1";
+
+export interface LevelTestInput {
+  answers: { word_id: number; level: CefrLevel; correct: boolean }[];
+}
+
+export interface LevelTestResult {
+  level: CefrLevel | "PRE";
+  correct: number;
+  total: number;
+  scores: Record<CefrLevel, { correct: number; total: number }>;
+}
+
+/**
+ * Save a level-test result. Highest level where >=3/4 correct becomes the
+ * detected CEFR level; "PRE" means the user didn't hit the threshold even at
+ * A1. Also upserts word_progress so correct answers seed the SRS deck.
+ */
+export async function saveLevelTest(input: LevelTestInput): Promise<LevelTestResult | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const levels: CefrLevel[] = ["A1", "A2", "B1", "B2", "C1"];
+  const scores: Record<CefrLevel, { correct: number; total: number }> = {
+    A1: { correct: 0, total: 0 },
+    A2: { correct: 0, total: 0 },
+    B1: { correct: 0, total: 0 },
+    B2: { correct: 0, total: 0 },
+    C1: { correct: 0, total: 0 },
+  };
+
+  for (const a of input.answers) {
+    if (!scores[a.level]) continue;
+    scores[a.level].total += 1;
+    if (a.correct) scores[a.level].correct += 1;
+  }
+
+  let detected: CefrLevel | "PRE" = "PRE";
+  for (const l of levels) {
+    const s = scores[l];
+    if (s.total > 0 && s.correct / s.total >= 0.6) detected = l;
+  }
+
+  const correct = input.answers.filter((a) => a.correct).length;
+  const total = input.answers.length;
+
+  await supabase.from("level_tests").insert({
+    user_id: user.id,
+    level: detected,
+    correct,
+    total,
+    scores,
+  });
+
+  // Seed SRS state from the answers (similar to onboarding).
+  const now = new Date();
+  const future2d = new Date(now.getTime() + 2 * 86_400_000);
+  const rows = input.answers.map((a) => ({
+    user_id: user.id,
+    word_id: a.word_id,
+    correct_count: a.correct ? 1 : 0,
+    wrong_count: a.correct ? 0 : 1,
+    mastered: false,
+    ease_factor: a.correct ? 2.5 : 2.3,
+    interval_days: a.correct ? 2 : 0,
+    repetitions: a.correct ? 1 : 0,
+    next_review_at: (a.correct ? future2d : now).toISOString(),
+    last_answered_at: now.toISOString(),
+  }));
+  if (rows.length) {
+    await supabase.from("word_progress").upsert(rows, { onConflict: "user_id,word_id" });
+  }
+
+  return { level: detected, correct, total, scores };
+}
+
 export async function skipOnboarding() {
   const supabase = await createClient();
   const {

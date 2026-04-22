@@ -105,20 +105,7 @@ export default function ImportClient({ vocabulary, masteredIds, seenIds, signedI
   const clearSelection = () => setSelected(new Set());
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <header className="bg-white/80 backdrop-blur border-b border-slate-100 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-        <Link href="/" className="flex items-center gap-2 hover:opacity-70 transition-opacity">
-          <span className="text-2xl">🇫🇷</span>
-          <h1 className="text-lg font-bold text-slate-800">French Vocab</h1>
-        </Link>
-        <div className="flex items-center gap-3 text-sm">
-          <Link href="/vocabulary" className="text-slate-600 hover:text-slate-900">Browse</Link>
-          {signedIn && <Link href="/review" className="text-slate-600 hover:text-slate-900">Review</Link>}
-          {signedIn && <Link href="/progress" className="text-blue-600 hover:text-blue-800 font-medium">Progress</Link>}
-        </div>
-      </header>
-
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-5">
+    <div className="max-w-2xl w-full mx-auto px-4 py-6 space-y-5">
         <div>
           <h1 className="text-xl font-bold text-slate-900 mb-1">Import text</h1>
           <p className="text-sm text-slate-500">
@@ -291,7 +278,6 @@ export default function ImportClient({ vocabulary, masteredIds, seenIds, signedI
             )}
           </>
         )}
-      </main>
     </div>
   );
 }

@@ -8,7 +8,6 @@ import {
   reviewWord,
   markWordMastered,
   undoLastReview,
-  signOut,
   type ReviewResult,
   type WordProgressSnapshot,
 } from "@/app/actions";
@@ -23,24 +22,14 @@ import {
 } from "@/lib/quiz_types";
 import { speak, ttsSupported, prewarmVoices } from "@/lib/tts";
 import AudioButton from "@/components/AudioButton";
-import ThemeToggle from "@/components/ThemeToggle";
+import { useStats } from "@/components/AppShell";
 import type { User } from "@supabase/supabase-js";
 
 type AnswerState = "unanswered" | "correct" | "wrong" | "accent";
 
-export interface QuizStats {
-  current_streak: number;
-  longest_streak: number;
-  daily_goal: number;
-  daily_new_goal: number;
-  today_count: number;
-  today_new_count: number;
-}
-
 interface QuizCardProps {
   initialQueue?: number[] | null;
   queueLabel?: string | null;
-  initialStats?: QuizStats | null;
   initialSeenIds?: number[];
 }
 
@@ -74,9 +63,9 @@ const RATING_OPTIONS: { quality: Quality; label: string; sub: string; key: strin
 export default function QuizCard({
   initialQueue,
   queueLabel,
-  initialStats,
   initialSeenIds,
 }: QuizCardProps) {
+  const { stats, setStats } = useStats();
   const [currentWord, setCurrentWord] = useState<VocabWord | null>(null);
   const [qType, setQType] = useState<QuestionType>("mc_fr_en");
   const [choices, setChoices] = useState<string[]>([]);
@@ -89,7 +78,6 @@ export default function QuizCard({
   const [masteredIds, setMasteredIds] = useState<Set<number>>(new Set());
   const [seenIds, setSeenIds] = useState<Set<number>>(new Set(initialSeenIds ?? []));
   const [user, setUser] = useState<User | null>(null);
-  const [stats, setStats] = useState<QuizStats | null>(initialStats ?? null);
   const [rating, setRating] = useState(false);
   const [queueIdx, setQueueIdx] = useState(0);
   const [queueDone, setQueueDone] = useState(false);
@@ -454,70 +442,7 @@ export default function QuizCard({
   const remainingCount = vocabulary.filter((w) => !masteredIds.has(w.id)).length;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex flex-col">
-      {/* Header */}
-      <header className="bg-white/80 backdrop-blur border-b border-slate-100 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-        <div className="flex items-center gap-2">
-          <Link href="/" className="flex items-center gap-2 hover:opacity-70 transition-opacity">
-            <span className="text-2xl">🇫🇷</span>
-            <h1 className="text-lg font-bold text-slate-800 hidden sm:block">French Vocab</h1>
-          </Link>
-          {queueLabel && (
-            <span className="ml-2 text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
-              {queueLabel}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          {stats && (
-            <div className="hidden sm:flex items-center gap-2 text-sm">
-              <span
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 font-semibold"
-                title={`Longest streak: ${stats.longest_streak}`}
-              >
-                🔥 {stats.current_streak}
-              </span>
-              <span
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold"
-                title="Today's review goal"
-              >
-                🎯 {stats.today_count}/{stats.daily_goal}
-              </span>
-              {stats.daily_new_goal > 0 && (
-                <span
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-semibold"
-                  title="Today's new-word goal"
-                >
-                  ✨ {stats.today_new_count}/{stats.daily_new_goal}
-                </span>
-              )}
-            </div>
-          )}
-          <div className="hidden md:flex items-center gap-1 text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-            <span className="text-green-600 font-bold">{score.correct}</span>
-            <span>/</span>
-            <span>{score.total}</span>
-          </div>
-          {user ? (
-            <>
-              <Link href="/review" className="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors hidden sm:inline">Review</Link>
-              <Link href="/import" className="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors hidden md:inline">Import</Link>
-              <Link href="/vocabulary" className="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors hidden sm:inline">Browse</Link>
-              <Link href="/progress" className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors">Progress</Link>
-              <form action={signOut}>
-                <button className="text-sm text-slate-400 hover:text-slate-600 transition-colors">Sign out</button>
-              </form>
-            </>
-          ) : (
-            <>
-              <Link href="/vocabulary" className="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors hidden sm:inline">Browse</Link>
-              <Link href="/login" className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors">Sign in</Link>
-            </>
-          )}
-          <ThemeToggle />
-        </div>
-      </header>
-
+    <>
       {/* Undo bar (only visible when lastAction exists) */}
       {lastAction && user && (
         <div className="bg-slate-900 text-white text-sm flex items-center justify-center gap-3 py-2 px-4">
@@ -535,6 +460,24 @@ export default function QuizCard({
           >
             ×
           </button>
+        </div>
+      )}
+
+      {/* Queue label + session score strip */}
+      {(queueLabel || score.total > 0) && (
+        <div className="w-full max-w-lg mx-auto px-4 pt-4 flex items-center justify-between gap-2">
+          {queueLabel ? (
+            <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+              {queueLabel}
+            </span>
+          ) : (
+            <span />
+          )}
+          {score.total > 0 && (
+            <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+              <span className="text-green-600 font-bold">{score.correct}</span>/<span>{score.total}</span>
+            </span>
+          )}
         </div>
       )}
 
@@ -557,8 +500,8 @@ export default function QuizCard({
               <Link href="/" className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all text-sm">
                 Learn new words →
               </Link>
-              <Link href="/review" className="w-full py-3 border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium rounded-xl transition-all text-sm">
-                Review hub
+              <Link href="/vocabulary?tab=due" className="w-full py-3 border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium rounded-xl transition-all text-sm">
+                See what's due
               </Link>
             </div>
           </div>
@@ -663,7 +606,7 @@ export default function QuizCard({
           </div>
         </main>
       )}
-    </div>
+    </>
   );
 }
 

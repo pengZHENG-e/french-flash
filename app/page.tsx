@@ -1,4 +1,5 @@
 import QuizCard from "@/components/QuizCard";
+import AppShell from "@/components/AppShell";
 import { createClient } from "@/lib/supabase/server";
 import { vocabulary } from "@/data/vocabulary";
 import { LEVEL_RANGES, type Level } from "@/data/levels";
@@ -71,7 +72,7 @@ async function loadServerState() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { stats: null, seenIds: [] as number[], onboarded: true };
+  if (!user) return { stats: null, seenIds: [] as number[], onboarded: true, signedIn: false };
 
   const [{ data: stats }, { data: progressRows }] = await Promise.all([
     supabase
@@ -98,6 +99,7 @@ async function loadServerState() {
     },
     seenIds: progressRows?.map((r) => r.word_id) ?? [],
     onboarded: stats?.onboarded ?? false,
+    signedIn: true,
   };
 }
 
@@ -117,11 +119,12 @@ export default async function Home({
   }
 
   return (
-    <QuizCard
-      initialQueue={queue.ids.length ? queue.ids : null}
-      queueLabel={queue.label}
-      initialStats={server.stats}
-      initialSeenIds={server.seenIds}
-    />
+    <AppShell signedIn={server.signedIn} initialStats={server.stats}>
+      <QuizCard
+        initialQueue={queue.ids.length ? queue.ids : null}
+        queueLabel={queue.label}
+        initialSeenIds={server.seenIds}
+      />
+    </AppShell>
   );
 }

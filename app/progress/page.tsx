@@ -2,10 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { vocabulary } from "@/data/vocabulary";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { signOut, setDailyGoal, setDailyNewGoal } from "@/app/actions";
+import { setDailyGoal, setDailyNewGoal } from "@/app/actions";
 import { getLevel, LEVEL_RANGES } from "@/data/levels";
 import Heatmap from "@/components/Heatmap";
 import NotificationPrefs from "@/components/NotificationPrefs";
+import AppShell from "@/components/AppShell";
 
 const POS_BUCKETS: { key: string; label: string; match: (pos: string) => boolean }[] = [
   { key: "noun",        label: "Nouns",       match: (p) => p.startsWith("noun")   },
@@ -100,24 +101,18 @@ export default async function ProgressPage() {
     if (Number.isFinite(v)) await setDailyNewGoal(v);
   }
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <header className="bg-white/80 backdrop-blur border-b border-slate-100 px-4 py-3 flex items-center justify-between sticky top-0 z-10">
-        <Link href="/" className="flex items-center gap-2 hover:opacity-70 transition-opacity">
-          <span className="text-2xl">🇫🇷</span>
-          <h1 className="text-lg font-bold text-slate-800">French Vocab</h1>
-        </Link>
-        <div className="flex items-center gap-3 text-sm">
-          <Link href="/vocabulary" className="text-slate-600 hover:text-slate-900">Browse</Link>
-          <Link href="/review" className="text-slate-600 hover:text-slate-900">Review</Link>
-          <Link href="/import" className="text-slate-600 hover:text-slate-900">Import</Link>
-          <form action={signOut}>
-            <button className="text-slate-400 hover:text-slate-600 transition-colors">Sign out</button>
-          </form>
-        </div>
-      </header>
+  const shellStats = {
+    current_streak: streak,
+    longest_streak: longestStreak,
+    daily_goal: dailyGoal,
+    daily_new_goal: dailyNewGoal,
+    today_count: todayCount,
+    today_new_count: todayNewCount,
+  };
 
-      <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+  return (
+    <AppShell signedIn initialStats={shellStats}>
+      <div className="max-w-2xl w-full mx-auto px-4 py-6 space-y-6">
         {/* Streak + goals */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
           <div className="grid grid-cols-3 gap-4">
@@ -299,7 +294,18 @@ export default async function ProgressPage() {
             })}
           </div>
         </div>
-      </main>
-    </div>
+
+        {/* Retake placement test */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-slate-700">Retake placement test</p>
+            <p className="text-xs text-slate-400">10 quick questions; re-seed your SRS state.</p>
+          </div>
+          <Link href="/onboarding" className="text-xs font-semibold text-blue-600 hover:text-blue-800">
+            Start →
+          </Link>
+        </div>
+      </div>
+    </AppShell>
   );
 }

@@ -163,18 +163,25 @@ async function checkAchievements(
   userId: string,
   stats: AchievementStats
 ): Promise<UnlockedAchievement[]> {
-  const { data: existing } = await supabase
+  const { data: existing, error } = await supabase
     .from("user_achievements")
     .select("achievement")
     .eq("user_id", userId);
-  const already = new Set((existing ?? []).map((r) => r.achievement));
 
+  // If the table doesn't exist yet (migration not run), bail silently.
+  if (error) return [];
+
+  const already = new Set((existing ?? []).map((r) => r.achievement));
   const newly = computeUnlocks(stats, already);
   if (newly.length === 0) return [];
 
-  await supabase
+  const { error: insertError } = await supabase
     .from("user_achievements")
     .insert(newly.map((a) => ({ user_id: userId, achievement: a.key })));
+
+  // If insert failed (e.g. RLS blocked), don't surface the achievements —
+  // they would fire again on the next review since they weren't persisted.
+  if (insertError) return [];
 
   return newly.map(({ key, name, description, icon }: Achievement) => ({
     key,

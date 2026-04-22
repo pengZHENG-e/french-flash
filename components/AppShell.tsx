@@ -21,6 +21,8 @@ export interface QuizStats {
   daily_new_goal: number;
   today_count: number;
   today_new_count: number;
+  total_xp: number;
+  level: number;
 }
 
 interface StatsCtxValue {
@@ -78,20 +80,26 @@ function AppHeader({ signedIn, stats }: { signedIn: boolean; stats: QuizStats | 
         {stats && (
           <div className="flex items-center gap-1.5">
             <span
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 text-sm font-semibold"
+              title={`${stats.total_xp} XP total`}
+            >
+              ⚡ Lv{stats.level}
+            </span>
+            <span
               className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-sm font-semibold"
               title={`Longest streak: ${stats.longest_streak}`}
             >
               🔥 {stats.current_streak}
             </span>
             <span
-              className="hidden xs:flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-sm font-semibold"
+              className="hidden sm:flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-sm font-semibold"
               title="Today's review goal"
             >
               🎯 {stats.today_count}/{stats.daily_goal}
             </span>
             {stats.daily_new_goal > 0 && (
               <span
-                className="hidden sm:flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-sm font-semibold"
+                className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-sm font-semibold"
                 title="Today's new-word goal"
               >
                 ✨ {stats.today_new_count}/{stats.daily_new_goal}

@@ -7,6 +7,7 @@ import { getLevel, LEVEL_RANGES } from "@/data/levels";
 import Heatmap from "@/components/Heatmap";
 import NotificationPrefs from "@/components/NotificationPrefs";
 import AppShell from "@/components/AppShell";
+import { levelFromXp, levelProgress, ACHIEVEMENTS } from "@/lib/xp";
 
 const POS_BUCKETS: { key: string; label: string; match: (pos: string) => boolean }[] = [
   { key: "noun",        label: "Nouns",       match: (p) => p.startsWith("noun")   },
@@ -35,7 +36,7 @@ export default async function ProgressPage() {
     supabase
       .from("user_stats")
       .select(
-        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, total_reviews, weekly_email_enabled"
+        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, total_reviews, weekly_email_enabled, total_xp, goals_hit_total"
       )
       .eq("user_id", user.id)
       .maybeSingle(),
@@ -108,6 +109,10 @@ export default async function ProgressPage() {
     if (Number.isFinite(v)) await setDailyNewGoal(v);
   }
 
+  const totalXp = stats?.total_xp ?? 0;
+  const goalsHitTotal = stats?.goals_hit_total ?? 0;
+  const xpLevel = levelProgress(totalXp);
+
   const shellStats = {
     current_streak: streak,
     longest_streak: longestStreak,
@@ -115,7 +120,16 @@ export default async function ProgressPage() {
     daily_new_goal: dailyNewGoal,
     today_count: todayCount,
     today_new_count: todayNewCount,
+    total_xp: totalXp,
+    level: levelFromXp(totalXp),
   };
+
+  // Fetch unlocked achievements.
+  const { data: unlockedRows } = await supabase
+    .from("user_achievements")
+    .select("achievement, unlocked_at")
+    .eq("user_id", user.id);
+  const unlockedMap = new Map((unlockedRows ?? []).map((r) => [r.achievement, r.unlocked_at]));
 
   return (
     <AppShell signedIn initialStats={shellStats}>
@@ -155,6 +169,66 @@ export default async function ProgressPage() {
               <input type="number" name="daily_new_goal" defaultValue={dailyNewGoal} min={0} max={50} step={1} className="w-16 px-2 py-1 rounded-md border border-slate-200 text-sm text-center" />
               <button className="text-xs font-semibold text-purple-600 hover:text-purple-800">Save</button>
             </form>
+          </div>
+        </div>
+
+        {/* Level + XP */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Player level</p>
+              <p className="text-3xl font-bold text-yellow-600">⚡ {xpLevel.level}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total XP</p>
+              <p className="text-2xl font-bold text-slate-800">{totalXp.toLocaleString()}</p>
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+              <span>Progress to Lv {xpLevel.level + 1}</span>
+              <span>
+                {xpLevel.intoLevel} / {xpLevel.needForNext}
+              </span>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-2.5">
+              <div
+                className="bg-gradient-to-r from-yellow-400 to-orange-400 h-2.5 rounded-full transition-all duration-500"
+                style={{ width: `${xpLevel.pct}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Achievements */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
+              Achievements
+            </h2>
+            <p className="text-xs text-slate-500">
+              {unlockedMap.size} / {ACHIEVEMENTS.length}
+            </p>
+          </div>
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            {ACHIEVEMENTS.map((a) => {
+              const unlocked = unlockedMap.has(a.key);
+              return (
+                <div
+                  key={a.key}
+                  className={`rounded-xl border p-3 text-center transition-all ${
+                    unlocked
+                      ? "bg-yellow-50 border-yellow-300"
+                      : "bg-slate-50 border-slate-200 opacity-50"
+                  }`}
+                  title={a.description}
+                >
+                  <div className={`text-2xl mb-1 ${unlocked ? "" : "grayscale"}`}>{a.icon}</div>
+                  <p className="text-xs font-semibold text-slate-700 leading-tight">{a.name}</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5 leading-tight">{a.description}</p>
+                </div>
+              );
+            })}
           </div>
         </div>
 

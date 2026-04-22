@@ -3,6 +3,7 @@ import AppShell from "@/components/AppShell";
 import { createClient } from "@/lib/supabase/server";
 import { vocabulary } from "@/data/vocabulary";
 import { LEVEL_RANGES, type Level } from "@/data/levels";
+import { levelFromXp } from "@/lib/xp";
 import { redirect } from "next/navigation";
 
 type RawSearchParams = { [k: string]: string | string[] | undefined };
@@ -78,7 +79,7 @@ async function loadServerState() {
     supabase
       .from("user_stats")
       .select(
-        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, onboarded"
+        "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, onboarded, total_xp"
       )
       .eq("user_id", user.id)
       .maybeSingle(),
@@ -87,6 +88,7 @@ async function loadServerState() {
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const onToday = stats?.today_date === todayStr;
+  const totalXp = stats?.total_xp ?? 0;
 
   return {
     stats: {
@@ -96,6 +98,8 @@ async function loadServerState() {
       daily_new_goal: stats?.daily_new_goal ?? 10,
       today_count: onToday ? stats?.today_count ?? 0 : 0,
       today_new_count: onToday ? stats?.today_new_count ?? 0 : 0,
+      total_xp: totalXp,
+      level: levelFromXp(totalXp),
     },
     seenIds: progressRows?.map((r) => r.word_id) ?? [],
     onboarded: stats?.onboarded ?? false,

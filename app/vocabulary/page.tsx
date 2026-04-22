@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { vocabulary } from "@/data/vocabulary";
 import AppShell from "@/components/AppShell";
+import { levelFromXp } from "@/lib/xp";
 import VocabBrowser from "./VocabBrowser";
 
 type SearchParams = { [k: string]: string | string[] | undefined };
@@ -10,12 +11,13 @@ async function loadShellStats(supabase: Awaited<ReturnType<typeof createClient>>
   const { data: stats } = await supabase
     .from("user_stats")
     .select(
-      "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date"
+      "current_streak, longest_streak, daily_goal, daily_new_goal, today_count, today_new_count, today_date, total_xp"
     )
     .eq("user_id", userId)
     .maybeSingle();
   const todayStr = new Date().toISOString().slice(0, 10);
   const onToday = stats?.today_date === todayStr;
+  const totalXp = stats?.total_xp ?? 0;
   return {
     current_streak: stats?.current_streak ?? 0,
     longest_streak: stats?.longest_streak ?? 0,
@@ -23,6 +25,8 @@ async function loadShellStats(supabase: Awaited<ReturnType<typeof createClient>>
     daily_new_goal: stats?.daily_new_goal ?? 10,
     today_count: onToday ? stats?.today_count ?? 0 : 0,
     today_new_count: onToday ? stats?.today_new_count ?? 0 : 0,
+    total_xp: totalXp,
+    level: levelFromXp(totalXp),
   };
 }
 

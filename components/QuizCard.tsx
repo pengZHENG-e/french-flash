@@ -23,6 +23,8 @@ import {
 import { speak, ttsSupported, prewarmVoices } from "@/lib/tts";
 import AudioButton from "@/components/AudioButton";
 import { useStats } from "@/components/AppShell";
+import AchievementToast from "@/components/AchievementToast";
+import type { UnlockedAchievement } from "@/app/actions";
 import type { User } from "@supabase/supabase-js";
 
 type AnswerState = "unanswered" | "correct" | "wrong" | "accent";
@@ -79,6 +81,8 @@ export default function QuizCard({
   const [seenIds, setSeenIds] = useState<Set<number>>(new Set(initialSeenIds ?? []));
   const [user, setUser] = useState<User | null>(null);
   const [rating, setRating] = useState(false);
+  const [xpFlash, setXpFlash] = useState<number | null>(null);
+  const [achievementQueue, setAchievementQueue] = useState<UnlockedAchievement[]>([]);
   const [queueIdx, setQueueIdx] = useState(0);
   const [queueDone, setQueueDone] = useState(false);
   const [lastAction, setLastAction] = useState<LastAction | null>(null);
@@ -283,6 +287,8 @@ export default function QuizCard({
               daily_new_goal: result.stats.daily_new_goal,
               today_count: result.stats.today_count,
               today_new_count: result.stats.today_new_count,
+              total_xp: result.stats.total_xp,
+              level: result.stats.level,
             });
           }
           if (result.mastered) {
@@ -290,6 +296,13 @@ export default function QuizCard({
           }
           if (result.was_new) {
             setSeenIds((prev) => new Set([...prev, currentWord.id]));
+          }
+          if (result.xp_earned > 0) {
+            setXpFlash(result.xp_earned);
+            setTimeout(() => setXpFlash(null), 1400);
+          }
+          if (result.new_achievements?.length) {
+            setAchievementQueue((prev) => [...prev, ...result.new_achievements]);
           }
           setLastAction({
             wordId: currentWord.id,
@@ -443,6 +456,23 @@ export default function QuizCard({
 
   return (
     <>
+      {/* Floating XP flash */}
+      {xpFlash !== null && (
+        <div
+          className="fixed top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none"
+          aria-live="polite"
+        >
+          <div className="px-4 py-2 rounded-full bg-yellow-400 text-yellow-900 font-bold text-sm shadow-lg animate-in fade-in slide-in-from-top-2 duration-200">
+            +{xpFlash} XP ⚡
+          </div>
+        </div>
+      )}
+
+      <AchievementToast
+        queue={achievementQueue}
+        onDismiss={(key) => setAchievementQueue((prev) => prev.filter((a) => a.key !== key))}
+      />
+
       {/* Undo bar (only visible when lastAction exists) */}
       {lastAction && user && (
         <div className="bg-slate-900 text-white text-sm flex items-center justify-center gap-3 py-2 px-4">

@@ -4,6 +4,13 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { computeNext, isMastered, type Quality } from "@/lib/srs";
 import { vocabulary } from "@/data/vocabulary";
+import {
+  xpForReview,
+  computeUnlocks,
+  levelFromXp,
+  type Achievement,
+  type AchievementStats,
+} from "@/lib/xp";
 
 // --- Types -----------------------------------------------------------------
 
@@ -16,6 +23,13 @@ export interface WordProgressSnapshot {
   repetitions: number;
   next_review_at: string | null;
   last_answered_at: string | null;
+}
+
+export interface UnlockedAchievement {
+  key: string;
+  name: string;
+  description: string;
+  icon: string;
 }
 
 export interface ReviewResult {
@@ -34,8 +48,12 @@ export interface ReviewResult {
     daily_new_goal: number;
     goal_just_hit: boolean;
     new_goal_just_hit: boolean;
+    total_xp: number;
+    level: number;
   } | null;
-  prev_snapshot: WordProgressSnapshot | null; // null ⇒ was a brand-new word
+  xp_earned: number;
+  new_achievements: UnlockedAchievement[];
+  prev_snapshot: WordProgressSnapshot | null;
   was_new: boolean;
 }
 
@@ -45,15 +63,25 @@ function todayYmd(now: Date = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
 
+interface BumpStatsOutcome {
+  stats: NonNullable<ReviewResult["stats"]>;
+  current_streak: number;
+  longest_streak: number;
+  total_reviews: number;
+  goals_hit_total: number;
+  level_tests_taken: number;
+}
+
 async function bumpStats(
   supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string,
-  wasNew: boolean
-): Promise<ReviewResult["stats"]> {
+  wasNew: boolean,
+  xpEarned: number
+): Promise<BumpStatsOutcome> {
   const { data: existing } = await supabase
     .from("user_stats")
     .select(
-      "current_streak, longest_streak, last_activity_date, daily_goal, today_count, today_date, total_reviews, daily_new_goal, today_new_count"
+      "current_streak, longest_streak, last_activity_date, daily_goal, today_count, today_date, total_reviews, daily_new_goal, today_new_count, total_xp, goals_hit_total, level_tests_taken"
     )
     .eq("user_id", userId)
     .maybeSingle();
@@ -71,6 +99,8 @@ async function bumpStats(
   const prevTodayCount = onToday ? existing?.today_count ?? 0 : 0;
   const prevTodayNewCount = onToday ? existing?.today_new_count ?? 0 : 0;
   const totalReviews = (existing?.total_reviews ?? 0) + 1;
+  const prevTotalXp = existing?.total_xp ?? 0;
+  const prevGoalsHit = existing?.goals_hit_total ?? 0;
 
   let currentStreak = prevStreak;
   if (lastActivity === todayStr) {
@@ -85,12 +115,15 @@ async function bumpStats(
   const todayNewCount = prevTodayNewCount + (wasNew ? 1 : 0);
   const goalJustHit = prevTodayCount < dailyGoal && todayCount >= dailyGoal;
   const newGoalJustHit = wasNew && prevTodayNewCount < dailyNewGoal && todayNewCount >= dailyNewGoal;
+  const goalsHitTotal = prevGoalsHit + (goalJustHit ? 1 : 0);
+  const totalXp = prevTotalXp + xpEarned;
+  const longest = Math.max(prevLongest, currentStreak);
 
   await supabase.from("user_stats").upsert(
     {
       user_id: userId,
       current_streak: currentStreak,
-      longest_streak: Math.max(prevLongest, currentStreak),
+      longest_streak: longest,
       last_activity_date: todayStr,
       today_count: todayCount,
       today_new_count: todayNewCount,
@@ -98,40 +131,94 @@ async function bumpStats(
       daily_goal: dailyGoal,
       daily_new_goal: dailyNewGoal,
       total_reviews: totalReviews,
+      total_xp: totalXp,
+      goals_hit_total: goalsHitTotal,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id" }
   );
 
   return {
+    stats: {
+      current_streak: currentStreak,
+      today_count: todayCount,
+      today_new_count: todayNewCount,
+      daily_goal: dailyGoal,
+      daily_new_goal: dailyNewGoal,
+      goal_just_hit: goalJustHit,
+      new_goal_just_hit: newGoalJustHit,
+      total_xp: totalXp,
+      level: levelFromXp(totalXp),
+    },
     current_streak: currentStreak,
-    today_count: todayCount,
-    today_new_count: todayNewCount,
-    daily_goal: dailyGoal,
-    daily_new_goal: dailyNewGoal,
-    goal_just_hit: goalJustHit,
-    new_goal_just_hit: newGoalJustHit,
+    longest_streak: longest,
+    total_reviews: totalReviews,
+    goals_hit_total: goalsHitTotal,
+    level_tests_taken: existing?.level_tests_taken ?? 0,
   };
+}
+
+async function checkAchievements(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  stats: AchievementStats
+): Promise<UnlockedAchievement[]> {
+  const { data: existing } = await supabase
+    .from("user_achievements")
+    .select("achievement")
+    .eq("user_id", userId);
+  const already = new Set((existing ?? []).map((r) => r.achievement));
+
+  const newly = computeUnlocks(stats, already);
+  if (newly.length === 0) return [];
+
+  await supabase
+    .from("user_achievements")
+    .insert(newly.map((a) => ({ user_id: userId, achievement: a.key })));
+
+  return newly.map(({ key, name, description, icon }: Achievement) => ({
+    key,
+    name,
+    description,
+    icon,
+  }));
 }
 
 async function bumpDailyActivity(
   supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string,
-  isCorrect: boolean
+  isCorrect: boolean,
+  xp: number
 ) {
   const day = todayYmd();
   const { data: existing } = await supabase
     .from("daily_activity")
-    .select("review_count, correct, wrong")
+    .select("review_count, correct, wrong, xp_earned")
     .eq("user_id", userId)
     .eq("day", day)
     .maybeSingle();
   const reviewCount = (existing?.review_count ?? 0) + 1;
   const correct = (existing?.correct ?? 0) + (isCorrect ? 1 : 0);
   const wrong = (existing?.wrong ?? 0) + (isCorrect ? 0 : 1);
+  const xpEarned = (existing?.xp_earned ?? 0) + xp;
   await supabase
     .from("daily_activity")
-    .upsert({ user_id: userId, day, review_count: reviewCount, correct, wrong }, { onConflict: "user_id,day" });
+    .upsert(
+      { user_id: userId, day, review_count: reviewCount, correct, wrong, xp_earned: xpEarned },
+      { onConflict: "user_id,day" }
+    );
+}
+
+async function countMastered(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string
+): Promise<number> {
+  const { count } = await supabase
+    .from("word_progress")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("mastered", true);
+  return count ?? 0;
 }
 
 // --- Public actions --------------------------------------------------------
@@ -180,6 +267,11 @@ export async function reviewWord(wordId: number, quality: Quality): Promise<Revi
   );
   const mastered = isMastered(next);
 
+  const prevMastered = existing?.mastered ?? false;
+  const becameMastered = mastered && !prevMastered;
+
+  const xpEarned = xpForReview({ quality, wasNew, becameMastered });
+
   await supabase.from("word_progress").upsert(
     {
       user_id: user.id,
@@ -196,17 +288,30 @@ export async function reviewWord(wordId: number, quality: Quality): Promise<Revi
     { onConflict: "user_id,word_id" }
   );
 
-  const [stats] = await Promise.all([
-    bumpStats(supabase, user.id, wasNew),
-    bumpDailyActivity(supabase, user.id, isCorrect),
+  const [bumpOutcome] = await Promise.all([
+    bumpStats(supabase, user.id, wasNew, xpEarned),
+    bumpDailyActivity(supabase, user.id, isCorrect, xpEarned),
   ]);
+
+  const masteredCount = await countMastered(supabase, user.id);
+  const newAchievements = await checkAchievements(supabase, user.id, {
+    current_streak: bumpOutcome.current_streak,
+    longest_streak: bumpOutcome.longest_streak,
+    total_reviews: bumpOutcome.total_reviews,
+    mastered_count: masteredCount,
+    total_xp: bumpOutcome.stats.total_xp,
+    goals_hit_total: bumpOutcome.goals_hit_total,
+    level_tests_taken: bumpOutcome.level_tests_taken,
+  });
 
   return {
     correct_count: correctCount,
     wrong_count: wrongCount,
     mastered,
     ...next,
-    stats,
+    stats: bumpOutcome.stats,
+    xp_earned: xpEarned,
+    new_achievements: newAchievements,
     prev_snapshot: prevSnapshot,
     was_new: wasNew,
   };
@@ -390,6 +495,35 @@ export async function saveLevelTest(input: LevelTestInput): Promise<LevelTestRes
   if (rows.length) {
     await supabase.from("word_progress").upsert(rows, { onConflict: "user_id,word_id" });
   }
+
+  // Increment level_tests_taken + trigger achievement checks.
+  const { data: stats } = await supabase
+    .from("user_stats")
+    .select(
+      "current_streak, longest_streak, total_reviews, total_xp, goals_hit_total, level_tests_taken"
+    )
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const newLtTaken = (stats?.level_tests_taken ?? 0) + 1;
+  await supabase.from("user_stats").upsert(
+    {
+      user_id: user.id,
+      level_tests_taken: newLtTaken,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" }
+  );
+
+  const masteredCount = await countMastered(supabase, user.id);
+  await checkAchievements(supabase, user.id, {
+    current_streak: stats?.current_streak ?? 0,
+    longest_streak: stats?.longest_streak ?? 0,
+    total_reviews: stats?.total_reviews ?? 0,
+    mastered_count: masteredCount,
+    total_xp: stats?.total_xp ?? 0,
+    goals_hit_total: stats?.goals_hit_total ?? 0,
+    level_tests_taken: newLtTaken,
+  });
 
   return { level: detected, correct, total, scores };
 }

@@ -38,9 +38,15 @@ body {
 
 .dark .bg-white { background-color: rgb(30 41 59) !important; }
 .dark .bg-white\/80 { background-color: rgb(15 23 42 / 0.8) !important; }
+.dark .bg-white\/70 { background-color: rgb(15 23 42 / 0.7) !important; }
+.dark .bg-white\/90 { background-color: rgb(15 23 42 / 0.9) !important; }
 .dark .bg-slate-100 { background-color: rgb(51 65 85) !important; }
 .dark .bg-slate-50 { background-color: rgb(30 41 59) !important; }
+.dark .bg-slate-200 { background-color: rgb(51 65 85) !important; }
+.dark .bg-slate-300 { background-color: rgb(71 85 105) !important; }
 .dark .bg-slate-900 { background-color: rgb(2 6 23) !important; }
+.dark .bg-slate-900\/50 { background-color: rgb(2 6 23 / 0.7) !important; }
+.dark .bg-slate-900\/60 { background-color: rgb(2 6 23 / 0.7) !important; }
 .dark .bg-blue-50 { background-color: rgb(30 58 138 / 0.2) !important; }
 .dark .bg-green-50 { background-color: rgb(20 83 45 / 0.35) !important; }
 .dark .bg-orange-50 { background-color: rgb(124 45 18 / 0.35) !important; }
@@ -66,3 +72,14 @@ body {
 .dark .from-blue-50 { --tw-gradient-from: rgb(15 23 42) !important; }
 .dark .via-white { --tw-gradient-via: rgb(30 41 59) !important; }
 .dark .to-purple-50 { --tw-gradient-to: rgb(49 46 129) !important; }
+
+/* Combo flash animation: fade-in, hold, fade-out over 1.4s. */
+@keyframes combo-flash-anim {
+  0%   { opacity: 0; transform: translate(-50%, -8px); }
+  10%  { opacity: 1; transform: translate(-50%, 0); }
+  85%  { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, 0); }
+}
+.combo-flash {
+  animation: combo-flash-anim 1.4s ease-out forwards;
+}

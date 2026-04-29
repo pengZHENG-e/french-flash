@@ -20,10 +20,15 @@ import {
   buildCloze,
   type QuestionType,
 } from "@/lib/quiz_types";
-import { speak, ttsSupported, prewarmVoices } from "@/lib/tts";
+import { speak, hasFrenchVoice, prewarmVoices } from "@/lib/tts";
 import AudioButton from "@/components/AudioButton";
 import { useStats } from "@/components/AppShell";
 import AchievementToast from "@/components/AchievementToast";
+import ComboFlash from "@/components/ComboFlash";
+import Toast from "@/components/Toast";
+import DailyGoalCelebration, {
+  type DailyGoalSummary,
+} from "@/components/DailyGoalCelebration";
 import type { UnlockedAchievement } from "@/app/actions";
 import type { User } from "@supabase/supabase-js";
 
@@ -56,11 +61,19 @@ function saveLocalMastered(ids: Set<number>) {
 }
 
 const RATING_OPTIONS: { quality: Quality; label: string; sub: string; key: string; cls: string }[] = [
-  { quality: QUALITY.Again, label: "Again", sub: "<10m",  key: "1", cls: "border-red-200 bg-red-50 text-red-700 hover:bg-red-100" },
-  { quality: QUALITY.Hard,  label: "Hard",  sub: "short", key: "2", cls: "border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100" },
-  { quality: QUALITY.Good,  label: "Good",  sub: "keep",  key: "3", cls: "border-green-200 bg-green-50 text-green-700 hover:bg-green-100" },
-  { quality: QUALITY.Easy,  label: "Easy",  sub: "long",  key: "4", cls: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100" },
+  { quality: QUALITY.Again, label: "Again", sub: "<10m",  key: "1", cls: "border-red-200 bg-red-50 text-red-700 dark:text-red-200 hover:bg-red-100" },
+  { quality: QUALITY.Hard,  label: "Hard",  sub: "short", key: "2", cls: "border-orange-200 bg-orange-50 text-orange-700 dark:text-orange-200 hover:bg-orange-100" },
+  { quality: QUALITY.Good,  label: "Good",  sub: "keep",  key: "3", cls: "border-green-200 bg-green-50 text-green-700 dark:text-green-200 hover:bg-green-100" },
+  { quality: QUALITY.Easy,  label: "Easy",  sub: "long",  key: "4", cls: "border-blue-200 bg-blue-50 text-blue-700 dark:text-blue-200 hover:bg-blue-100" },
 ];
+
+/** Look up the vocab entry whose visible label matches a chosen string. */
+function findChoiceWord(text: string, qType: QuestionType): VocabWord | undefined {
+  if (qType === "mc_en_fr" || qType === "cloze") {
+    return vocabulary.find((w) => w.french === text);
+  }
+  return vocabulary.find((w) => w.english === text);
+}
 
 export default function QuizCard({
   initialQueue,
@@ -75,6 +88,7 @@ export default function QuizCard({
   const [typedInput, setTypedInput] = useState("");
   const [answerState, setAnswerState] = useState<AnswerState>("unanswered");
   const [score, setScore] = useState({ correct: 0, total: 0 });
+  const [combo, setCombo] = useState(0);
   const [showExample, setShowExample] = useState(false);
   const [usedIds, setUsedIds] = useState<Set<number>>(new Set());
   const [masteredIds, setMasteredIds] = useState<Set<number>>(new Set());
@@ -87,6 +101,15 @@ export default function QuizCard({
   const [queueDone, setQueueDone] = useState(false);
   const [lastAction, setLastAction] = useState<LastAction | null>(null);
   const [showMnemonic, setShowMnemonic] = useState(false);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
+  const [infoToast, setInfoToast] = useState<string | null>(null);
+  const [goalCelebration, setGoalCelebration] = useState<DailyGoalSummary | null>(null);
+
+  useEffect(() => {
+    if (!goalCelebration) return;
+    const t = setTimeout(() => setGoalCelebration(null), 5500);
+    return () => clearTimeout(t);
+  }, [goalCelebration]);
 
   const vocabById = useRef<Map<number, VocabWord>>(new Map());
   const ttsOk = useRef<boolean>(false);
@@ -94,7 +117,16 @@ export default function QuizCard({
   useEffect(() => {
     vocabById.current = new Map(vocabulary.map((w) => [w.id, w]));
     prewarmVoices();
-    ttsOk.current = ttsSupported();
+    ttsOk.current = hasFrenchVoice();
+    // Recheck after voiceschanged (Chrome loads asynchronously).
+    const recheck = () => {
+      ttsOk.current = hasFrenchVoice();
+    };
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.addEventListener?.("voiceschanged", recheck);
+      return () =>
+        window.speechSynthesis.removeEventListener?.("voiceschanged", recheck);
+    }
   }, []);
 
   // Auth + mastered-IDs + seen-IDs bootstrap.
@@ -188,7 +220,19 @@ export default function QuizCard({
     setCurrentWord(word);
 
     if (chosenType === "listen") {
-      setTimeout(() => speak(word.french), 150);
+      setTimeout(() => {
+        speak(word.french).then((ok) => {
+          if (!ok) {
+            // Silent failure (no voice, blocked autoplay) — fall back so the
+            // user isn't stuck staring at a button that does nothing.
+            ttsOk.current = false;
+            setQType("mc_fr_en");
+            setChoices(pickEnglishChoices(word, vocabulary));
+            setClozeMasked(null);
+            setInfoToast("Audio unavailable — switched to reading mode");
+          }
+        });
+      }, 150);
     }
   }, [seenIds]);
 
@@ -251,6 +295,12 @@ export default function QuizCard({
       correct: s.correct + (isCorrect ? 1 : 0),
       total: s.total + 1,
     }));
+    setCombo((c) => (isCorrect && !accentOnly ? c + 1 : 0));
+    if (!isCorrect && !accentOnly) {
+      // Auto-expand the mnemonic for words the user is struggling with —
+      // they're the ones who need it most.
+      setShowMnemonic(true);
+    }
   }, []);
 
   const handleChoice = useCallback(
@@ -271,14 +321,22 @@ export default function QuizCard({
     else finalizeAnswer(true, result === "accent_only");
   }, [answerState, currentWord, typedInput, finalizeAnswer]);
 
+  /** Rate + load a new word. Wraps server call with error-toast fallback. */
   const handleRate = useCallback(
     async (quality: Quality) => {
       if (!currentWord || rating) return;
       setRating(true);
 
       if (user) {
-        const result: ReviewResult | null = await reviewWord(currentWord.id, quality);
-        if (result) {
+        let result: ReviewResult | null = null;
+        try {
+          result = await reviewWord(currentWord.id, quality);
+        } catch {
+          result = null;
+        }
+        if (!result) {
+          setErrorToast("Couldn't save your rating. Check your connection — we'll keep going.");
+        } else {
           if (result.stats) {
             setStats({
               current_streak: result.stats.current_streak,
@@ -290,6 +348,17 @@ export default function QuizCard({
               total_xp: result.stats.total_xp,
               level: result.stats.level,
             });
+            if (result.stats.goal_just_hit) {
+              setGoalCelebration({
+                todayCount: result.stats.today_count,
+                goal: result.stats.daily_goal,
+                newCount: result.stats.today_new_count,
+                newGoal: result.stats.daily_new_goal,
+                streak: result.stats.current_streak,
+                correctSession: score.correct + (quality >= 3 ? 1 : 0),
+                totalSession: score.total,
+              });
+            }
           }
           if (result.mastered) {
             setMasteredIds((prev) => new Set([...prev, currentWord.id]));
@@ -315,8 +384,35 @@ export default function QuizCard({
       setRating(false);
       loadNewWord();
     },
-    [currentWord, user, rating, stats, loadNewWord]
+    [currentWord, user, rating, stats, score, loadNewWord, setStats]
   );
+
+  /** Re-show the same word right away. Used by the "Try again" button. */
+  const handleTryAgain = useCallback(async () => {
+    if (!currentWord || rating) return;
+    setRating(true);
+    if (user) {
+      try {
+        const result = await reviewWord(currentWord.id, QUALITY.Again);
+        if (result?.stats) {
+          setStats({
+            current_streak: result.stats.current_streak,
+            longest_streak: Math.max(result.stats.current_streak, stats?.longest_streak ?? 0),
+            daily_goal: result.stats.daily_goal,
+            daily_new_goal: result.stats.daily_new_goal,
+            today_count: result.stats.today_count,
+            today_new_count: result.stats.today_new_count,
+            total_xp: result.stats.total_xp,
+            level: result.stats.level,
+          });
+        }
+      } catch {
+        setErrorToast("Couldn't save — but you can keep practicing.");
+      }
+    }
+    setRating(false);
+    prepareWord(currentWord);
+  }, [currentWord, user, rating, stats, prepareWord, setStats]);
 
   const handleUndo = useCallback(async () => {
     if (!lastAction || !user) return;
@@ -347,7 +443,11 @@ export default function QuizCard({
     setMasteredIds(newMastered);
 
     if (user) {
-      await markWordMastered(currentWord.id);
+      try {
+        await markWordMastered(currentWord.id);
+      } catch {
+        setErrorToast("Couldn't sync — marked as known locally.");
+      }
     } else {
       saveLocalMastered(newMastered);
     }
@@ -459,14 +559,42 @@ export default function QuizCard({
     }
     const target =
       qType === "mc_en_fr" || qType === "cloze" ? currentWord?.french : currentWord?.english;
-    if (choice === target) return base + "border-green-500 bg-green-50 text-green-800";
+    if (choice === target)
+      return base + "border-green-500 bg-green-50 text-green-800 dark:text-green-200";
     if (choice === selected && answerState === "wrong")
-      return base + "border-red-500 bg-red-50 text-red-800";
+      return base + "border-red-500 bg-red-50 text-red-800 dark:text-red-200";
     return base + "border-slate-200 bg-white text-slate-400 cursor-default";
   };
 
   const isAlreadyMastered = currentWord ? masteredIds.has(currentWord.id) : false;
-  const remainingCount = vocabulary.filter((w) => !masteredIds.has(w.id)).length;
+  const masteredCount = masteredIds.size;
+  const totalWords = vocabulary.length;
+
+  // What progress bar to show above the question card.
+  const progressBar = useMemo(() => {
+    if (initialQueue && initialQueue.length > 0) {
+      return {
+        current: queueIdx + 1,
+        total: initialQueue.length,
+        label: "In set",
+        tone: "blue" as const,
+      };
+    }
+    if (stats && stats.daily_goal > 0) {
+      return {
+        current: Math.min(stats.today_count, stats.daily_goal),
+        total: stats.daily_goal,
+        label: "Today's goal",
+        tone: "green" as const,
+      };
+    }
+    return {
+      current: masteredCount,
+      total: totalWords,
+      label: "Mastered",
+      tone: "purple" as const,
+    };
+  }, [initialQueue, queueIdx, stats, masteredCount, totalWords]);
 
   return (
     <>
@@ -482,9 +610,27 @@ export default function QuizCard({
         </div>
       )}
 
+      <ComboFlash combo={combo} />
+
       <AchievementToast
         queue={achievementQueue}
         onDismiss={(key) => setAchievementQueue((prev) => prev.filter((a) => a.key !== key))}
+      />
+
+      <Toast
+        message={errorToast}
+        kind="error"
+        onDismiss={() => setErrorToast(null)}
+      />
+      <Toast
+        message={infoToast}
+        kind="info"
+        onDismiss={() => setInfoToast(null)}
+      />
+
+      <DailyGoalCelebration
+        summary={goalCelebration}
+        onDismiss={() => setGoalCelebration(null)}
       />
 
       {/* Undo bar (only visible when lastAction exists) */}
@@ -507,21 +653,38 @@ export default function QuizCard({
         </div>
       )}
 
-      {/* Queue label + session score strip */}
-      {(queueLabel || score.total > 0) && (
-        <div className="w-full max-w-lg mx-auto px-4 pt-4 flex items-center justify-between gap-2">
-          {queueLabel ? (
-            <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
-              {queueLabel}
-            </span>
-          ) : (
-            <span />
-          )}
-          {score.total > 0 && (
-            <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-              <span className="text-green-600 font-bold">{score.correct}</span>/<span>{score.total}</span>
-            </span>
-          )}
+      {/* Top strip: queue label + progress bar + session score */}
+      {!queueDone && (
+        <div className="w-full max-w-lg mx-auto px-4 pt-4 space-y-2">
+          <div className="flex items-center justify-between gap-2 min-h-[20px]">
+            {queueLabel ? (
+              <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                {queueLabel}
+              </span>
+            ) : (
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-slate-400">
+                {progressBar.label}
+              </span>
+            )}
+            <div className="flex items-center gap-1.5">
+              {combo >= 3 && (
+                <span className="text-xs font-bold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">
+                  🔥 {combo}
+                </span>
+              )}
+              {score.total > 0 && (
+                <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                  <span className="text-green-600 font-bold">{score.correct}</span>/
+                  <span>{score.total}</span>
+                </span>
+              )}
+            </div>
+          </div>
+          <ProgressBar
+            current={progressBar.current}
+            total={progressBar.total}
+            tone={progressBar.tone}
+          />
         </div>
       )}
 
@@ -545,7 +708,7 @@ export default function QuizCard({
                 Learn new words →
               </Link>
               <Link href="/vocabulary?tab=due" className="w-full py-3 border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium rounded-xl transition-all text-sm">
-                See what's due
+                See what&apos;s due
               </Link>
             </div>
           </div>
@@ -563,8 +726,6 @@ export default function QuizCard({
               answered={answerState !== "unanswered"}
               isMastered={isAlreadyMastered}
               clozeMasked={clozeMasked}
-              remainingCount={initialQueue ? null : remainingCount}
-              queuePosition={initialQueue ? { idx: queueIdx, total: initialQueue.length } : null}
             />
 
             {/* Answer area varies by type */}
@@ -619,12 +780,18 @@ export default function QuizCard({
                 word={currentWord}
                 answerState={answerState}
                 qType={qType}
+                selected={selected}
                 showExample={showExample}
                 setShowExample={setShowExample}
                 showMnemonic={showMnemonic}
                 setShowMnemonic={setShowMnemonic}
                 signedIn={!!user}
                 newGoalHit={stats ? stats.today_new_count >= stats.daily_new_goal && stats.daily_new_goal > 0 : false}
+                onTryAgain={
+                  answerState === "wrong" || answerState === "accent"
+                    ? handleTryAgain
+                    : null
+                }
               />
             )}
 
@@ -673,22 +840,49 @@ export default function QuizCard({
 
 // --- Sub-components --------------------------------------------------------
 
+function ProgressBar({
+  current,
+  total,
+  tone,
+}: {
+  current: number;
+  total: number;
+  tone: "blue" | "green" | "purple";
+}) {
+  const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+  const fill =
+    tone === "blue"
+      ? "bg-blue-500"
+      : tone === "green"
+      ? "bg-green-500"
+      : "bg-purple-500";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+        <div
+          className={`h-full ${fill} transition-all duration-300 rounded-full`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="text-[11px] font-semibold text-slate-500 tabular-nums shrink-0">
+        {current}/{total}
+      </span>
+    </div>
+  );
+}
+
 function QuestionPrompt({
   word,
   qType,
   answered,
   isMastered,
   clozeMasked,
-  remainingCount,
-  queuePosition,
 }: {
   word: VocabWord;
   qType: QuestionType;
   answered: boolean;
   isMastered: boolean;
   clozeMasked: string | null;
-  remainingCount: number | null;
-  queuePosition: { idx: number; total: number } | null;
 }) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 text-center relative">
@@ -712,23 +906,31 @@ function QuestionPrompt({
       {/* Body varies by type */}
       {qType === "mc_fr_en" && (
         <>
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <h2 className="text-5xl font-bold text-slate-900">{word.french}</h2>
+          <div className="flex items-center justify-center gap-3 mb-2 flex-wrap">
+            <h2 className="text-3xl sm:text-5xl font-bold text-slate-900 break-words max-w-full">
+              {word.french}
+            </h2>
             <AudioButton text={word.french} size="md" />
           </div>
-          <p className="text-slate-400 text-sm font-mono">/{word.pronunciation}/</p>
+          <p className="text-slate-400 text-sm font-mono break-words">/{word.pronunciation}/</p>
         </>
       )}
 
       {qType === "mc_en_fr" && (
         <>
-          <h2 className="text-3xl font-bold text-slate-900 mb-1 leading-snug">{word.english}</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-1 leading-snug break-words">
+            {word.english}
+          </h2>
           <p className="text-xs text-slate-400 uppercase tracking-wider">{word.partOfSpeech}</p>
           {answered && (
-            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100">
-              <span className="text-2xl font-bold text-slate-700">{word.french}</span>
+            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100 flex-wrap">
+              <span className="text-xl sm:text-2xl font-bold text-slate-700 break-words">
+                {word.french}
+              </span>
               <AudioButton text={word.french} size="sm" />
-              <span className="text-xs font-mono text-slate-400">/{word.pronunciation}/</span>
+              <span className="text-xs font-mono text-slate-400 break-words">
+                /{word.pronunciation}/
+              </span>
             </div>
           )}
         </>
@@ -741,9 +943,13 @@ function QuestionPrompt({
           </div>
           <p className="text-xs text-slate-400">Tap 🔊 or press <kbd className="px-1 bg-slate-100 rounded">S</kbd> to replay</p>
           {answered && (
-            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100">
-              <span className="text-2xl font-bold text-slate-700">{word.french}</span>
-              <span className="text-xs font-mono text-slate-400">/{word.pronunciation}/</span>
+            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100 flex-wrap">
+              <span className="text-xl sm:text-2xl font-bold text-slate-700 break-words">
+                {word.french}
+              </span>
+              <span className="text-xs font-mono text-slate-400 break-words">
+                /{word.pronunciation}/
+              </span>
             </div>
           )}
         </>
@@ -751,13 +957,19 @@ function QuestionPrompt({
 
       {qType === "type" && (
         <>
-          <h2 className="text-3xl font-bold text-slate-900 mb-1 leading-snug">{word.english}</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-1 leading-snug break-words">
+            {word.english}
+          </h2>
           <p className="text-xs text-slate-400 uppercase tracking-wider">{word.partOfSpeech}</p>
           {answered && (
-            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100">
-              <span className="text-2xl font-bold text-slate-700">{word.french}</span>
+            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100 flex-wrap">
+              <span className="text-xl sm:text-2xl font-bold text-slate-700 break-words">
+                {word.french}
+              </span>
               <AudioButton text={word.french} size="sm" />
-              <span className="text-xs font-mono text-slate-400">/{word.pronunciation}/</span>
+              <span className="text-xs font-mono text-slate-400 break-words">
+                /{word.pronunciation}/
+              </span>
             </div>
           )}
         </>
@@ -765,26 +977,19 @@ function QuestionPrompt({
 
       {qType === "cloze" && (
         <>
-          <p className="text-xl font-medium text-slate-800 leading-relaxed italic">
+          <p className="text-lg sm:text-xl font-medium text-slate-800 leading-relaxed italic break-words">
             &ldquo;{answered ? word.example.french : clozeMasked ?? word.example.french}&rdquo;
           </p>
           <p className="text-xs text-slate-400 mt-2">Hint: {word.english}</p>
           {answered && (
-            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100">
-              <span className="text-2xl font-bold text-slate-700">{word.french}</span>
+            <div className="flex items-center justify-center gap-2 mt-3 pt-3 border-t border-slate-100 flex-wrap">
+              <span className="text-xl sm:text-2xl font-bold text-slate-700 break-words">
+                {word.french}
+              </span>
               <AudioButton text={word.french} size="sm" />
             </div>
           )}
         </>
-      )}
-
-      {remainingCount !== null && (
-        <p className="text-xs text-slate-300 mt-3">{remainingCount} words left to learn</p>
-      )}
-      {queuePosition && (
-        <p className="text-xs text-slate-300 mt-3">
-          {queuePosition.idx + 1} / {queuePosition.total}
-        </p>
       )}
     </div>
   );
@@ -815,7 +1020,7 @@ function ChoicesArea({
             <span className="w-6 h-6 rounded-full border-2 border-current flex items-center justify-center text-xs font-bold shrink-0">
               {i + 1}
             </span>
-            <span className="flex-1 min-w-0">{choice}</span>
+            <span className="flex-1 min-w-0 break-words">{choice}</span>
             {answerState !== "unanswered" && choice === selected && selected !== null && (
               <span className="ml-auto">
                 {answerState === "correct" || answerState === "accent" ? (
@@ -858,10 +1063,10 @@ function TypeAnswerArea({
         className={`w-full px-4 py-4 rounded-xl border-2 text-lg text-center font-medium transition-all outline-none ${
           disabled
             ? answerState === "wrong"
-              ? "border-red-400 bg-red-50 text-red-800"
+              ? "border-red-400 bg-red-50 text-red-800 dark:text-red-200"
               : answerState === "accent"
-              ? "border-yellow-400 bg-yellow-50 text-yellow-900"
-              : "border-green-400 bg-green-50 text-green-800"
+              ? "border-yellow-400 bg-yellow-50 text-yellow-900 dark:text-yellow-100"
+              : "border-green-400 bg-green-50 text-green-800 dark:text-green-200"
             : "border-slate-200 bg-white focus:border-blue-400"
         }`}
       />
@@ -880,7 +1085,7 @@ function TypeAnswerArea({
         </p>
       )}
       {disabled && answerState === "accent" && (
-        <p className="text-center text-xs text-yellow-700 bg-yellow-50 rounded-md py-1 px-2">
+        <p className="text-center text-xs text-yellow-700 dark:text-yellow-200 bg-yellow-50 rounded-md py-1 px-2">
           Right word, watch the accents: <span className="font-bold">{word.french}</span>
         </p>
       )}
@@ -892,22 +1097,26 @@ function FeedbackPanel({
   word,
   answerState,
   qType,
+  selected,
   showExample,
   setShowExample,
   showMnemonic,
   setShowMnemonic,
   signedIn,
   newGoalHit,
+  onTryAgain,
 }: {
   word: VocabWord;
   answerState: AnswerState;
   qType: QuestionType;
+  selected: string | null;
   showExample: boolean;
   setShowExample: (v: boolean) => void;
   showMnemonic: boolean;
   setShowMnemonic: (v: boolean) => void;
   signedIn: boolean;
   newGoalHit: boolean;
+  onTryAgain: (() => void) | null;
 }) {
   const isPositive = answerState === "correct" || answerState === "accent";
   const label =
@@ -921,6 +1130,15 @@ function FeedbackPanel({
       ? `Correct: ${word.french}`
       : `Correct answer: ${word.english}`;
 
+  // For wrong MC answers: show what the user's choice actually meant.
+  const wrongChoiceWord =
+    answerState === "wrong" &&
+    selected &&
+    qType !== "type" &&
+    selected !== (qType === "mc_en_fr" || qType === "cloze" ? word.french : word.english)
+      ? findChoiceWord(selected, qType)
+      : undefined;
+
   return (
     <div
       className={`rounded-2xl border-2 p-4 space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300 ${
@@ -929,12 +1147,37 @@ function FeedbackPanel({
     >
       <div className="flex items-center gap-2">
         <span className="text-xl">{isPositive ? "🎉" : "💡"}</span>
-        <p className={`font-semibold ${isPositive ? "text-green-800" : "text-orange-800"}`}>{label}</p>
+        <p
+          className={`font-semibold ${
+            isPositive ? "text-green-800 dark:text-green-200" : "text-orange-800 dark:text-orange-200"
+          }`}
+        >
+          {label}
+        </p>
       </div>
+
+      {wrongChoiceWord && (
+        <div className="text-xs bg-white/70 border border-orange-200 rounded-lg px-3 py-2 text-slate-600">
+          You picked{" "}
+          <span className="font-semibold text-slate-900">
+            {qType === "mc_en_fr" || qType === "cloze"
+              ? wrongChoiceWord.french
+              : wrongChoiceWord.english}
+          </span>{" "}
+          —{" "}
+          <span className="text-slate-500">
+            that means &ldquo;
+            {qType === "mc_en_fr" || qType === "cloze"
+              ? wrongChoiceWord.english
+              : wrongChoiceWord.french}
+            &rdquo;
+          </span>
+        </div>
+      )}
 
       <p className="text-sm text-slate-600">{word.explanation}</p>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <button
           onClick={() => setShowExample(!showExample)}
           className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
@@ -947,6 +1190,14 @@ function FeedbackPanel({
             className="text-sm text-purple-600 hover:text-purple-800 font-medium flex items-center gap-1"
           >
             {showMnemonic ? "▾" : "▸"} Mnemonic ✨
+          </button>
+        )}
+        {onTryAgain && (
+          <button
+            onClick={onTryAgain}
+            className="ml-auto text-sm font-semibold text-orange-700 hover:text-orange-900 bg-white border border-orange-300 hover:bg-orange-100 px-3 py-1 rounded-full transition-all"
+          >
+            ↻ Try again
           </button>
         )}
       </div>
@@ -967,7 +1218,7 @@ function FeedbackPanel({
 
       {newGoalHit && (
         <p className="text-xs text-purple-600 bg-purple-50 rounded-md py-1 px-2">
-          ✨ Daily new-word quota hit. You'll keep reviewing — come back tomorrow for more fresh words.
+          ✨ Daily new-word quota hit. You&apos;ll keep reviewing — come back tomorrow for more fresh words.
         </p>
       )}
 

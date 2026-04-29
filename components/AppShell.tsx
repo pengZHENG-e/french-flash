@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
+import KeyboardHelp from "@/components/KeyboardHelp";
 import { signOut } from "@/app/actions";
 
 // --- Stats context ---------------------------------------------------------
@@ -61,6 +62,7 @@ export default function AppShell({ signedIn, initialStats, children }: AppShellP
         <AppHeader signedIn={signedIn} stats={stats} />
         <main className="flex-1 flex flex-col pb-24">{children}</main>
         <BottomTabBar signedIn={signedIn} />
+        <KeyboardHelp />
       </div>
     </StatsContext.Provider>
   );
@@ -107,6 +109,15 @@ function AppHeader({ signedIn, stats }: { signedIn: boolean; stats: QuizStats | 
             )}
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event("open-keyboard-help"))}
+          className="hidden sm:inline-flex w-7 h-7 items-center justify-center rounded-full text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-all text-sm font-bold"
+          aria-label="Show keyboard shortcuts"
+          title="Keyboard shortcuts (?)"
+        >
+          ?
+        </button>
         <ThemeToggle />
         {signedIn ? (
           <form action={signOut}>
